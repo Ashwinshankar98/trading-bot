@@ -1,5 +1,7 @@
 from fastapi import APIRouter
 from database import get_connection
+import os
+import httpx
 
 router = APIRouter(prefix="/trades", tags=["trades"])
 
@@ -54,3 +56,20 @@ def manual_close(trade_id: int, price: float):
     from core.paper_trader import close_trade
     pnl, msg = close_trade(trade_id, price)
     return {"pnl": pnl, "message": msg}
+
+@router.get("/test-telegram")
+async def test_telegram():
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    
+    if not token or not chat_id:
+        return {"error": "Telegram not configured"}
+    
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(url, json={
+            "chat_id": chat_id,
+            "text": "Trading bot is live and connected to Telegram!"
+        })
+    
+    return {"status": "sent", "telegram_response": resp.json()}
