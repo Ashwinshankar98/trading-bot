@@ -16,7 +16,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # tighten this once dashboard URL is known
+    allow_origins=[
+    "https://trading-bot-three-blond.vercel.app",
+    "http://localhost:5173",
+    ],   # tighten this once dashboard URL is known
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
