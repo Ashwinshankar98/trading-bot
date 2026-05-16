@@ -1,0 +1,89 @@
+import os, json
+import anthropic
+
+client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+def decide_trade(symbol: str, signal: str, indicators: dict,
+                 regime: str, account: dict, strategy: dict) -> dict:
+    """
+    Ask Claude whether to act on a signal given current market context.
+    Returns: { "action": "open"|"skip", "side": "long"|"short"|None,
+                "confidence": 0-1, "reasoning": str }
+    """
+    prompt = f"""You are a disciplined algorithmic trading assistant managing a paper trading account.
+
+Current market context:
+- Symbol: {symbol}
+- Signal received: {signal}
+- Market regime: {regime}
+- Indicators: {json.dumps(indicators, indent=2)}
+
+Account status:
+- Balance: ${account['balance']:.2f}
+- Equity:  ${account['equity']:.2f}
+- Starting balance was $10,000
+
+Active strategy rules:
+{json.dumps(strategy, indent=2)}
+
+Your job: Decide whether to open a trade based on the signal and context.
+
+Rules:
+1. Only trade if the signal aligns with the regime filter in the strategy.
+2. Skip if regime is 'volatile' unless the strategy explicitly allows it.
+3. Consider indicator confluence — more indicators agreeing = higher confidence.
+4. Be conservative — it is better to miss a trade than take a bad one.
+
+Respond ONLY with valid JSON (no markdown, no explanation outside JSON):
+{{
+  "action": "open" or "skip",
+  "side": "long" or "short" or null,
+  "confidence": 0.0 to 1.0,
+  "reasoning": "one concise paragraph explaining your decision"
+}}"""
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=512,
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    text = response.content[0].text.strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        return {"action": "skip", "side": None, "confidence": 0.0,
+                "reasoning": f"JSON parse error: {text[:200]}"}
+
+def write_post_mortem(trade: dict, indicators_at_entry: dict) -> dict:
+    """After a trade closes, ask Claude to write a post-mortem."""
+    outcome = "WIN" if (trade.get("pnl") or 0) > 0 else "LOSS"
+    prompt = f"""A paper trade just closed. Write a brief post-mortem.
+
+Trade details:
+- Symbol: {trade['symbol']}
+- Side: {trade['side']}
+- Entry: ${trade['entry_price']} → Exit: ${trade.get('exit_price', 'N/A')}
+- PnL: ${trade.get('pnl', 0):.2f} ({trade.get('pnl_pct', 0):.1f}%)
+- Outcome: {outcome}
+- Regime at entry: {trade.get('regime', 'unknown')}
+- Indicators at entry: {json.dumps(indicators_at_entry, indent=2)}
+- Original reasoning: {trade.get('llm_reasoning', 'N/A')}
+
+Respond ONLY with valid JSON:
+{{
+  "what_worked": "what went right (or N/A if loss)",
+  "what_failed": "what went wrong (or N/A if win)",
+  "market_notes": "brief observation about market conditions"
+}}"""
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    text = response.content[0].text.strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        return {"what_worked": "N/A", "what_failed": text[:200], "market_notes": ""}
