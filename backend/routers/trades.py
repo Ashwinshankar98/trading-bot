@@ -73,3 +73,16 @@ async def test_telegram():
         })
     
     return {"status": "sent", "telegram_response": resp.json()}
+
+@router.get("/test-claude")
+async def test_claude():
+    from core.llm import decide_trade
+    result = decide_trade(
+        symbol="AAPL",
+        signal="buy",
+        indicators={"rsi": 35, "macd": {"bullish_cross": True}},
+        regime="trending",
+        account={"balance": 10000, "equity": 10000},
+        strategy={"entry_threshold": 0.60, "max_open_trades": 3}
+    )
+    return result
