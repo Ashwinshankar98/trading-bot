@@ -6,10 +6,24 @@ from core.regime import detect_regime
 from core.paper_trader import get_account, get_active_strategy, open_trade, close_trade, get_open_trades
 from core.llm import decide_trade, write_post_mortem
 from database import get_connection
+import httpx
 
 router = APIRouter(prefix="/webhook", tags=["webhook"])
 
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "changeme")
+
+async def send_telegram(message: str):
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    async with httpx.AsyncClient() as client:
+        await client.post(url, json={
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "HTML"
+        })
 
 @router.post("/tradingview")
 async def tradingview_webhook(payload: WebhookPayload):
@@ -49,6 +63,13 @@ async def tradingview_webhook(payload: WebhookPayload):
                 conn.commit()
                 conn.close()
                 results.append({"trade_id": trade["id"], "pnl": pnl})
+
+                await send_telegram(
+                    f"🔴 <b>TRADE CLOSED</b>\n"
+                    f"Symbol: {symbol}\n"
+                    f"PnL: ${pnl:.2f}\n"
+                    f"{'✅ WIN' if pnl > 0 else '❌ LOSS'}"
+                )
         return {"status": "closed", "results": results}
 
     indicators = get_all_indicators(symbol)
@@ -74,6 +95,15 @@ async def tradingview_webhook(payload: WebhookPayload):
     if not trade_id:
         return {"status": "blocked", "reason": msg}
 
+    await send_telegram(
+        f"🟢 <b>TRADE OPENED</b>\n"
+        f"Symbol: {symbol}\n"
+        f"Side: {side.upper()}\n"
+        f"Price: ${price}\n"
+        f"Regime: {regime}\n"
+        f"Confidence: {decision['confidence']}\n"
+        f"Reason: {decision['reasoning'][:200]}"
+    )
     return {
         "status":     "opened",
         "trade_id":   trade_id,
