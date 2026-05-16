@@ -1,6 +1,22 @@
 import json
 from database import get_connection
-from datetime import datetime, timezone
+from datetime import datetime, timezone, time
+import pytz
+
+
+def is_market_open() -> bool:
+    """Only trade between 9:45am and 3:45pm Eastern, Mon-Fri."""
+    eastern = pytz.timezone("US/Eastern")
+    now = datetime.now(eastern)
+    
+    if now.weekday() >= 5:  # Saturday/Sunday
+        return False
+    
+    market_open  = time(9, 45)
+    market_close = time(15, 45)
+    current_time = now.time()
+    
+    return market_open <= current_time <= market_close
 
 def get_account():
     conn = get_connection()
