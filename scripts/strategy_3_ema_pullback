@@ -1,0 +1,85 @@
+//@version=5
+indicator(title="Strategy 3 - EMA 21 Pullback", overlay=true)
+
+// ═══════════════════════════════════════════════════════════════
+// INDICATORS
+// ═══════════════════════════════════════════════════════════════
+ema21   = ta.ema(close, 21)
+ema50   = ta.ema(close, 50)
+rsi_val = ta.rsi(close, 14)
+atr_val = ta.atr(14)
+
+// ═══════════════════════════════════════════════════════════════
+// TIME WINDOWS
+// ═══════════════════════════════════════════════════════════════
+in_hours = not na(time("5", "0930-1545:23456"))
+eod_time = not na(time("5", "1545-1600:23456"))
+
+// ═══════════════════════════════════════════════════════════════
+// TREND
+// ═══════════════════════════════════════════════════════════════
+uptrend   = close > ema50
+downtrend = close < ema50
+
+// ═══════════════════════════════════════════════════════════════
+// ENTRY SIGNALS
+// ═══════════════════════════════════════════════════════════════
+bounced_above  = close > ema21 and close[1] <= ema21 * 1.002
+rejected_below = close < ema21 and close[1] >= ema21 * 0.998
+
+buy_signal  = in_hours and uptrend   and bounced_above  and rsi_val > 40 and rsi_val < 65 and ta.rising(ema21, 3)
+sell_signal = in_hours and downtrend and rejected_below and rsi_val < 60 and rsi_val > 35 and ta.falling(ema21, 3)
+
+// ═══════════════════════════════════════════════════════════════
+// POSITION TRACKING & SL/TP
+// SL = 1x ATR beyond EMA21, TP = 2x risk
+// ═══════════════════════════════════════════════════════════════
+var float entry_price = na
+var int   position    = 0  // 1=long, -1=short, 0=flat
+
+if buy_signal and position == 0
+    entry_price := close
+    position    := 1
+
+if sell_signal and position == 0
+    entry_price := close
+    position    := -1
+
+sl_price = position == 1  ? entry_price - atr_val * 1.0 :
+           position == -1 ? entry_price + atr_val * 1.0 : na
+tp_price = position == 1  ? entry_price + atr_val * 2.0 :
+           position == -1 ? entry_price - atr_val * 2.0 : na
+
+hit_sl = position == 1  and low  <= sl_price or
+         position == -1 and high >= sl_price
+hit_tp = position == 1  and high >= tp_price or
+         position == -1 and low  <= tp_price
+
+close_signal = position != 0 and (hit_sl or hit_tp or eod_time)
+
+if close_signal
+    position    := 0
+    entry_price := na
+
+// ═══════════════════════════════════════════════════════════════
+// PLOTS
+// ═══════════════════════════════════════════════════════════════
+plot(ema21,    title="EMA 21", color=color.orange, linewidth=2)
+plot(ema50,    title="EMA 50", color=color.blue,   linewidth=2)
+plot(sl_price, title="SL",     color=color.red,    linewidth=1, style=plot.style_linebr)
+plot(tp_price, title="TP",     color=color.green,  linewidth=1, style=plot.style_linebr)
+
+plotshape(buy_signal,   title="PB Buy",  style=shape.labelup,   location=location.belowbar, color=color.green, text="PB UP",   textcolor=color.white)
+plotshape(sell_signal,  title="PB Sell", style=shape.labeldown, location=location.abovebar, color=color.red,   text="PB DOWN", textcolor=color.white)
+plotshape(close_signal, title="CLOSE",   style=shape.xcross,    location=location.abovebar, color=color.white, text="EXIT",    textcolor=color.white, size=size.small)
+
+bgcolor(uptrend   ? color.new(color.green, 97) : na)
+bgcolor(downtrend ? color.new(color.red,   97) : na)
+
+// ═══════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════
+alertcondition(buy_signal,   title="S3 BUY",   message="S3_BUY")
+alertcondition(sell_signal,  title="S3 SELL",  message="S3_SELL")
+alertcondition(close_signal, title="S3 CLOSE", message="S3_CLOSE")
+alertcondition(eod_time,     title="S3 EOD",   message="S3_EOD")

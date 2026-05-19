@@ -1,0 +1,89 @@
+//@version=5
+indicator(title="Strategy 2 - Opening Range Breakout", overlay=true)
+
+// ═══════════════════════════════════════════════════════════════
+// TIME WINDOWS
+// ═══════════════════════════════════════════════════════════════
+is_opening = not na(time("5", "0930-0945:23456"))
+in_hours   = not na(time("5", "0945-1545:23456"))
+eod_time   = not na(time("5", "1545-1600:23456"))
+
+// ═══════════════════════════════════════════════════════════════
+// OPENING RANGE
+// ═══════════════════════════════════════════════════════════════
+var float orb_high = na
+var float orb_low  = na
+var bool  orb_set  = false
+
+if ta.change(time("D")) != 0
+    orb_high := na
+    orb_low  := na
+    orb_set  := false
+
+if is_opening
+    orb_high := na(orb_high) ? high : math.max(orb_high, high)
+    orb_low  := na(orb_low)  ? low  : math.min(orb_low,  low)
+
+if in_hours and not orb_set and not na(orb_high)
+    orb_set := true
+
+// ═══════════════════════════════════════════════════════════════
+// ENTRY SIGNALS
+// ═══════════════════════════════════════════════════════════════
+vol_avg = ta.sma(volume, 20)
+
+buy_signal  = in_hours and orb_set and ta.crossover(close,  orb_high) and volume > vol_avg * 1.2
+sell_signal = in_hours and orb_set and ta.crossunder(close, orb_low)  and volume > vol_avg * 1.2
+
+// ═══════════════════════════════════════════════════════════════
+// POSITION TRACKING & SL/TP
+// ORB SL = opposite side of range, TP = 1x range extension
+// ═══════════════════════════════════════════════════════════════
+var float entry_price = na
+var int   position    = 0  // 1=long, -1=short, 0=flat
+
+orb_range = na(orb_high) or na(orb_low) ? na : orb_high - orb_low
+
+if buy_signal and position == 0
+    entry_price := close
+    position    := 1
+
+if sell_signal and position == 0
+    entry_price := close
+    position    := -1
+
+sl_price = position == 1  ? orb_low  :
+           position == -1 ? orb_high : na
+tp_price = position == 1  ? orb_high + orb_range :
+           position == -1 ? orb_low  - orb_range : na
+
+hit_sl = position == 1  and low  <= sl_price or
+         position == -1 and high >= sl_price
+hit_tp = position == 1  and high >= tp_price or
+         position == -1 and low  <= tp_price
+
+close_signal = position != 0 and (hit_sl or hit_tp or eod_time)
+
+if close_signal
+    position    := 0
+    entry_price := na
+
+// ═══════════════════════════════════════════════════════════════
+// PLOTS
+// ═══════════════════════════════════════════════════════════════
+plot(orb_high, title="ORB High", color=color.green, linewidth=2, style=plot.style_linebr)
+plot(orb_low,  title="ORB Low",  color=color.red,   linewidth=2, style=plot.style_linebr)
+plot(sl_price, title="SL",       color=color.red,   linewidth=1, style=plot.style_linebr)
+plot(tp_price, title="TP",       color=color.green, linewidth=1, style=plot.style_linebr)
+
+plotshape(buy_signal,   title="ORB Buy",  style=shape.labelup,   location=location.belowbar, color=color.green, text="ORB UP",   textcolor=color.white)
+plotshape(sell_signal,  title="ORB Sell", style=shape.labeldown, location=location.abovebar, color=color.red,   text="ORB DOWN", textcolor=color.white)
+plotshape(close_signal, title="CLOSE",    style=shape.xcross,    location=location.abovebar, color=color.white, text="EXIT",     textcolor=color.white, size=size.small)
+
+// ═══════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════
+alertcondition(buy_signal,   title="S2 BUY",   message="S2_BUY")
+alertcondition(sell_signal,  title="S2 SELL",  message="S2_SELL")
+alertcondition(close_signal, title="S2 CLOSE", message="S2_CLOSE")
+alertcondition(eod_time,     title="S2 EOD",   message="S2_EOD")
