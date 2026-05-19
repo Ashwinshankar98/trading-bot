@@ -105,6 +105,47 @@ def get_strategy_breakdown():
     conn.close()
     return result
 
+@router.get("/matrix")
+def get_pnl_matrix():
+    """P&L breakdown by strategy × symbol — shows which strategy works best on which ticker."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT
+            strategy_id,
+            symbol,
+            COUNT(*)                                                  AS trades,
+            SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END)                 AS wins,
+            ROUND(SUM(pnl), 2)                                        AS total_pnl,
+            ROUND(AVG(pnl), 2)                                        AS avg_pnl,
+            ROUND(AVG(CASE WHEN pnl > 0 THEN pnl END), 2)            AS avg_win,
+            ROUND(AVG(CASE WHEN pnl <= 0 THEN pnl END), 2)           AS avg_loss
+        FROM trades
+        WHERE status = 'closed'
+        GROUP BY strategy_id, symbol
+        ORDER BY strategy_id, symbol
+    """).fetchall()
+
+    open_rows = conn.execute("""
+        SELECT strategy_id, symbol, COUNT(*) AS open_trades
+        FROM trades WHERE status = 'open'
+        GROUP BY strategy_id, symbol
+    """).fetchall()
+    conn.close()
+
+    open_map = {(r["strategy_id"], r["symbol"]): r["open_trades"] for r in open_rows}
+
+    result = []
+    for r in rows:
+        r = dict(r)
+        win_rate = round(r["wins"] / r["trades"] * 100, 1) if r["trades"] else 0
+        result.append({
+            **r,
+            "win_rate":   win_rate,
+            "open_trades": open_map.get((r["strategy_id"], r["symbol"]), 0),
+        })
+    return result
+
+
 @router.get("/{trade_id}/journal")
 def get_trade_journal(trade_id: int):
     conn = get_connection()

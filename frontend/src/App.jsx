@@ -203,11 +203,84 @@ function TradeRow({ trade, onClose }) {
   );
 }
 
+// ── Strategy × Ticker Matrix ──────────────────────────────────────────────────
+function PnlMatrix({ matrix }) {
+  const symbols    = [...new Set(matrix.map(r => r.symbol))].sort();
+  const stratIds   = ["ema_cross", "orb", "ema_pullback"];
+  const stratLabels = { ema_cross: "EMA Cross", orb: "ORB", ema_pullback: "EMA Pullback" };
+
+  if (matrix.length === 0) return null;
+
+  const cell = (sid, sym) => matrix.find(r => r.strategy_id === sid && r.symbol === sym);
+
+  return (
+    <div style={{ padding: "0 24px 16px" }}>
+      <div style={{ fontSize: 9, color: "#555", letterSpacing: 3, marginBottom: 10 }}>
+        STRATEGY × TICKER MATRIX
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: "left", padding: "6px 10px", color: "#555", fontSize: 9, letterSpacing: 2, borderBottom: "0.5px solid #1e1e35" }}>
+                STRATEGY
+              </th>
+              {symbols.map(sym => (
+                <th key={sym} style={{ textAlign: "center", padding: "6px 14px", color: "#a78bfa", fontSize: 11, fontWeight: 700, borderBottom: "0.5px solid #1e1e35", minWidth: 120 }}>
+                  {sym}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {stratIds.map(sid => {
+              const st = STRATEGIES[sid];
+              return (
+                <tr key={sid}>
+                  <td style={{ padding: "8px 10px", color: st?.color || "#aaa", fontSize: 10, fontWeight: 700, borderBottom: "0.5px solid #0f0f1a", whiteSpace: "nowrap" }}>
+                    {stratLabels[sid]}
+                  </td>
+                  {symbols.map(sym => {
+                    const c = cell(sid, sym);
+                    if (!c) return (
+                      <td key={sym} style={{ textAlign: "center", padding: "8px 14px", color: "#333", borderBottom: "0.5px solid #0f0f1a" }}>
+                        —
+                      </td>
+                    );
+                    const pnl = c.total_pnl || 0;
+                    return (
+                      <td key={sym} style={{ textAlign: "center", padding: "8px 14px", borderBottom: "0.5px solid #0f0f1a", background: "#0a0a14" }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: pnlColor(pnl) }}>
+                          {pnl >= 0 ? "+" : ""}{fmt(pnl)}
+                        </div>
+                        <div style={{ fontSize: 9, color: "#555", marginTop: 2 }}>
+                          {c.trades}T · {c.win_rate}% WR
+                        </div>
+                        {c.open_trades > 0 && (
+                          <div style={{ fontSize: 9, color: "#4ade80", marginTop: 1 }}>
+                            {c.open_trades} open
+                          </div>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [account, setAccount] = useState(null);
   const [strategies, setStrategies] = useState([]);
   const [trades, setTrades] = useState([]);
+  const [matrix, setMatrix] = useState([]);
   const [stratFilter, setStratFilter] = useState("all");
   const [statusTab, setStatusTab] = useState("open");
   const [lastUpdate, setLastUpdate] = useState(null);
@@ -215,14 +288,16 @@ export default function App() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [acct, strats, tradeData] = await Promise.all([
+      const [acct, strats, tradeData, matrixData] = await Promise.all([
         fetch(`${API}/trades/account`).then(r => r.json()),
         fetch(`${API}/trades/strategies`).then(r => r.json()),
         fetch(`${API}/trades/?limit=200`).then(r => r.json()),
+        fetch(`${API}/trades/matrix`).then(r => r.json()),
       ]);
       setAccount(acct);
       setStrategies(Array.isArray(strats) ? strats : []);
       setTrades(Array.isArray(tradeData) ? tradeData : []);
+      setMatrix(Array.isArray(matrixData) ? matrixData : []);
       setLastUpdate(new Date());
     } catch (e) { console.error(e); }
   }, []);
@@ -296,6 +371,9 @@ export default function App() {
           ))}
         </div>
       </div>
+
+      {/* ── Strategy × Ticker Matrix ───────────────────────────────────────── */}
+      <PnlMatrix matrix={matrix} />
 
       {/* ── Trade list ─────────────────────────────────────────────────────── */}
       <div style={{ padding: "0 24px 24px" }}>
