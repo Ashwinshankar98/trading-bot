@@ -15,17 +15,34 @@ def init_db():
     c = conn.cursor()
 
     c.executescript("""
-    -- ── Account ─────────────────────────────────────────────────
+
+    -- ── Per-strategy accounts (one per strategy) ─────────────────
+    CREATE TABLE IF NOT EXISTS strategy_accounts (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        strategy_id  TEXT    NOT NULL UNIQUE,  -- 'ema_cross' | 'orb' | 'ema_pullback'
+        name         TEXT    NOT NULL,
+        description  TEXT,
+        balance      REAL    NOT NULL DEFAULT 10000.0,
+        equity       REAL    NOT NULL DEFAULT 10000.0,
+        is_active    INTEGER NOT NULL DEFAULT 1,
+        updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
+
+    INSERT OR IGNORE INTO strategy_accounts (strategy_id, name, description, balance, equity) VALUES
+        ('ema_cross',    'EMA Cross + VWAP',        'Sophisticated: EMA 9/21 cross + VWAP + RSI + MACD confluence', 10000.0, 10000.0),
+        ('orb',          'Opening Range Breakout',   'ORB: Trade breakout of first 15-min range. High win rate.', 10000.0, 10000.0),
+        ('ema_pullback', 'EMA 21 Pullback',          'Simple: Price pulls back to EMA 21, reversal candle entry. Fires frequently.', 10000.0, 10000.0);
+
+    -- ── Legacy single account (kept for backward compat) ─────────
     CREATE TABLE IF NOT EXISTS account (
         id          INTEGER PRIMARY KEY DEFAULT 1,
         balance     REAL    NOT NULL DEFAULT 10000.0,
         equity      REAL    NOT NULL DEFAULT 10000.0,
         updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
     );
-
     INSERT OR IGNORE INTO account (id, balance, equity) VALUES (1, 10000.0, 10000.0);
 
-    -- ── Trades ──────────────────────────────────────────────────
+    -- ── Trades ───────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS trades (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
         symbol          TEXT    NOT NULL,
@@ -40,38 +57,38 @@ def init_db():
         pnl_pct         REAL,
         entry_at        TEXT    NOT NULL DEFAULT (datetime('now')),
         exit_at         TEXT,
+        strategy_id     TEXT    NOT NULL DEFAULT 'ema_cross',
         strategy_ver    INTEGER NOT NULL DEFAULT 1,
-        indicators      TEXT,   -- JSON snapshot of indicator values at entry
-        llm_reasoning   TEXT,   -- Claude's reasoning for this trade
-        regime          TEXT    -- trending / ranging / volatile
+        indicators      TEXT,
+        llm_reasoning   TEXT,
+        regime          TEXT
     );
 
-    -- ── Trade journal (post-mortem per closed trade) ─────────────
+    -- ── Trade journal ─────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS trade_journal (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        trade_id    INTEGER NOT NULL REFERENCES trades(id),
-        what_worked TEXT,
-        what_failed TEXT,
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        trade_id     INTEGER NOT NULL REFERENCES trades(id),
+        what_worked  TEXT,
+        what_failed  TEXT,
         market_notes TEXT,
-        created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        created_at   TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    -- ── Strategy versions ────────────────────────────────────────
+    -- ── Strategy versions ─────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS strategy_versions (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        version         INTEGER NOT NULL UNIQUE,
-        rules           TEXT    NOT NULL,  -- JSON: indicator weights, thresholds
-        rationale       TEXT,              -- Claude's written explanation
-        win_rate        REAL,
-        avg_winner      REAL,
-        avg_loser       REAL,
-        sample_size     INTEGER,
-        created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-        is_active       INTEGER NOT NULL DEFAULT 0
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        version      INTEGER NOT NULL UNIQUE,
+        rules        TEXT    NOT NULL,
+        rationale    TEXT,
+        win_rate     REAL,
+        avg_winner   REAL,
+        avg_loser    REAL,
+        sample_size  INTEGER,
+        created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+        is_active    INTEGER NOT NULL DEFAULT 0
     );
 
-    INSERT OR IGNORE INTO strategy_versions
-        (version, rules, rationale, is_active)
+    INSERT OR IGNORE INTO strategy_versions (version, rules, rationale, is_active)
     VALUES (
         1,
         '{
@@ -93,20 +110,21 @@ def init_db():
                 "volatile":  []
             }
         }',
-        'Initial strategy — baseline settings based on commonly used indicator weights.',
+        'Initial strategy.',
         1
     );
 
-    -- ── Signals log ─────────────────────────────────────────────
+    -- ── Signals log ───────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS signals (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         symbol      TEXT NOT NULL,
-        source      TEXT NOT NULL,   -- tradingview / internal
-        signal_type TEXT NOT NULL,   -- buy / sell / close
-        payload     TEXT,            -- raw JSON from webhook
+        source      TEXT NOT NULL,
+        signal_type TEXT NOT NULL,
+        payload     TEXT,
         acted_on    INTEGER DEFAULT 0,
         received_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
     """)
 
     conn.commit()

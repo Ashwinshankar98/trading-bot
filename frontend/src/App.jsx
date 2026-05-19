@@ -1,186 +1,315 @@
 import { useState, useEffect, useCallback } from "react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 
-const API = "https://trading-bot-production-8037.up.railway.app";
+const API = import.meta.env.VITE_API_URL || "https://trading-bot-production-8037.up.railway.app";
 
-const fmt = (n) => n?.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const fmtPct = (n) => (n >= 0 ? "+" : "") + n?.toFixed(2) + "%";
+const STRATEGIES = {
+  all: { name: "All Strategies", color: "#a78bfa", bg: "#1a1a3a" },
+  ema_cross: { name: "EMA Cross + VWAP", color: "#60a5fa", bg: "#0d1a2a" },
+  orb: { name: "Opening Range Breakout", color: "#4ade80", bg: "#0d2010" },
+  ema_pullback: { name: "EMA 21 Pullback", color: "#fbbf24", bg: "#1f1500" },
+};
 
 function usePoll(fn, ms = 5000) {
-  useEffect(() => {
-    fn();
-    const id = setInterval(fn, ms);
-    return () => clearInterval(id);
-  }, []);
+  useEffect(() => { fn(); const id = setInterval(fn, ms); return () => clearInterval(id); }, [fn]);
 }
 
+function fmt(n, prefix = "$") {
+  if (n == null) return "—";
+  const v = parseFloat(n);
+  return `${v >= 0 ? "" : "-"}${prefix}${Math.abs(v).toFixed(2)}`;
+}
+
+function pct(n) {
+  if (n == null) return "—";
+  return `${parseFloat(n) >= 0 ? "+" : ""}${parseFloat(n).toFixed(2)}%`;
+}
+
+function pnlColor(n) {
+  if (n == null) return "#888";
+  return parseFloat(n) > 0 ? "#4ade80" : parseFloat(n) < 0 ? "#f87171" : "#888";
+}
+
+// ── Strategy Card ─────────────────────────────────────────────────────────────
+function StrategyCard({ s, active, onClick }) {
+  const st = STRATEGIES[s.strategy_id] || STRATEGIES.all;
+  const pnl = s.total_pnl || 0;
+  const eq = s.equity || 10000;
+  const bal = s.balance || 10000;
+  const gain = eq - 10000;
+
+  return (
+    <div onClick={onClick} style={{
+      background: active ? st.bg : "#0f0f1a",
+      border: `1px solid ${active ? st.color : "#1e1e35"}`,
+      borderRadius: 10, padding: "14px 16px", cursor: "pointer",
+      transition: "all 0.15s",
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+        <div>
+          <div style={{ fontSize: 9, color: st.color, letterSpacing: 2, marginBottom: 3 }}>
+            {s.strategy_id?.toUpperCase().replace("_", " ")}
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>{s.name}</div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: pnlColor(gain) }}>
+            {gain >= 0 ? "+" : ""}{fmt(gain)}
+          </div>
+          <div style={{ fontSize: 10, color: pnlColor(gain) }}>{pct(s.pnl_pct)}</div>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4, marginBottom: 8 }}>
+        {[
+          ["BALANCE", fmt(bal)],
+          ["WIN RATE", s.total_trades > 0 ? `${s.win_rate}%` : "—"],
+          ["TRADES", s.total_trades || 0],
+        ].map(([k, v]) => (
+          <div key={k} style={{ background: "#080810", borderRadius: 6, padding: "5px 7px" }}>
+            <div style={{ fontSize: 8, color: "#555", letterSpacing: 1, marginBottom: 2 }}>{k}</div>
+            <div style={{ fontSize: 12, color: "#e2e8f0", fontWeight: 600 }}>{v}</div>
+          </div>
+        ))}
+      </div>
+      {s.open_trades > 0 && (
+        <div style={{ fontSize: 10, color: st.color, background: st.bg, padding: "2px 8px", borderRadius: 4, display: "inline-block" }}>
+          {s.open_trades} open {s.open_trades === 1 ? "trade" : "trades"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Trade Row ─────────────────────────────────────────────────────────────────
+function TradeRow({ trade, onClose }) {
+  const st = STRATEGIES[trade.strategy_id] || STRATEGIES.all;
+  const isOpen = trade.status === "open";
+  const pnl = trade.pnl ?? null;
+
+  return (
+    <div style={{
+      background: "#0f0f1a", border: "0.5px solid #1e1e35", borderRadius: 8,
+      padding: "12px 14px", marginBottom: 8,
+      borderLeft: `3px solid ${st.color}`,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 6 }}>
+        {/* Left */}
+        <div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 5, flexWrap: "wrap" }}>
+            <span style={{ background: st.bg, color: st.color, fontSize: 9, padding: "2px 7px", borderRadius: 4, fontWeight: 700, letterSpacing: 1 }}>
+              {st.name}
+            </span>
+            <span style={{ background: trade.side === "long" ? "#052e16" : "#2d0a0a", color: trade.side === "long" ? "#4ade80" : "#f87171", fontSize: 10, padding: "2px 7px", borderRadius: 4, fontWeight: 700 }}>
+              {trade.side?.toUpperCase()}
+            </span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#f1f5f9" }}>{trade.symbol}</span>
+            <span style={{ fontSize: 10, color: isOpen ? "#4ade80" : "#555", background: isOpen ? "#052e16" : "#1a1a1a", padding: "1px 7px", borderRadius: 10 }}>
+              {isOpen ? "● OPEN" : "CLOSED"}
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: "#aaa" }}>Entry: <b style={{ color: "#e2e8f0" }}>${trade.entry_price}</b></span>
+            {trade.exit_price && <span style={{ fontSize: 11, color: "#aaa" }}>Exit: <b style={{ color: "#e2e8f0" }}>${trade.exit_price}</b></span>}
+            <span style={{ fontSize: 11, color: "#aaa" }}>Qty: <b style={{ color: "#e2e8f0" }}>{trade.quantity}</b></span>
+            {trade.stop_loss && <span style={{ fontSize: 11, color: "#f87171" }}>SL: ${trade.stop_loss}</span>}
+            {trade.take_profit && <span style={{ fontSize: 11, color: "#4ade80" }}>TP: ${trade.take_profit}</span>}
+          </div>
+          <div style={{ fontSize: 10, color: "#555", marginTop: 4 }}>
+            {trade.entry_at?.slice(0, 16)} UTC
+            {trade.exit_at ? ` → ${trade.exit_at?.slice(0, 16)} UTC` : ""}
+          </div>
+        </div>
+
+        {/* Right — P&L */}
+        <div style={{ textAlign: "right" }}>
+          {pnl != null ? (
+            <>
+              <div style={{ fontSize: 20, fontWeight: 700, color: pnlColor(pnl) }}>{fmt(pnl)}</div>
+              <div style={{ fontSize: 11, color: pnlColor(pnl) }}>{pct(trade.pnl_pct)}</div>
+            </>
+          ) : (
+            <div style={{ fontSize: 11, color: "#555" }}>Open P&L: live</div>
+          )}
+          {isOpen && (
+            <button onClick={() => onClose(trade.id)} style={{
+              marginTop: 6, background: "#2d0a0a", border: "0.5px solid #f87171",
+              color: "#f87171", borderRadius: 5, padding: "4px 12px", fontSize: 10,
+              fontFamily: "inherit", cursor: "pointer", letterSpacing: 1,
+            }}>
+              CLOSE →
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Reasoning */}
+      {trade.llm_reasoning && (
+        <div style={{ marginTop: 8, padding: "6px 10px", background: "#080810", borderRadius: 6, fontSize: 10, color: "#666", lineHeight: 1.5 }}>
+          {trade.llm_reasoning.slice(0, 200)}{trade.llm_reasoning.length > 200 ? "..." : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [account, setAccount] = useState(null);
-  const [trades, setTrades]   = useState([]);
-  const [tab, setTab]         = useState("open");
-  const [loading, setLoading] = useState(true);
+  const [strategies, setStrategies] = useState([]);
+  const [trades, setTrades] = useState([]);
+  const [stratFilter, setStratFilter] = useState("all");
+  const [statusTab, setStatusTab] = useState("open");
   const [lastUpdate, setLastUpdate] = useState(null);
+  const [closePrice, setClosePrice] = useState({});
 
   const fetchAll = useCallback(async () => {
     try {
-      const [acc, trd] = await Promise.all([
+      const [acct, strats, tradeData] = await Promise.all([
         fetch(`${API}/trades/account`).then(r => r.json()),
-        fetch(`${API}/trades/?limit=100`).then(r => r.json()),
+        fetch(`${API}/trades/strategies`).then(r => r.json()),
+        fetch(`${API}/trades/?limit=200`).then(r => r.json()),
       ]);
-      setAccount(acc);
-      setTrades(trd);
+      setAccount(acct);
+      setStrategies(Array.isArray(strats) ? strats : []);
+      setTrades(Array.isArray(tradeData) ? tradeData : []);
       setLastUpdate(new Date());
-      setLoading(false);
-    } catch (e) {
-      console.error(e);
-    }
+    } catch (e) { console.error(e); }
   }, []);
 
   usePoll(fetchAll, 5000);
 
-  const open   = trades.filter(t => t.status === "open");
-  const closed = trades.filter(t => t.status === "closed");
+  const handleClose = async (trade_id) => {
+    const price = parseFloat(closePrice[trade_id] || prompt(`Exit price for trade #${trade_id}?`));
+    if (!price) return;
+    await fetch(`${API}/trades/${trade_id}/close?price=${price}`, { method: "POST" });
+    fetchAll();
+  };
 
-  const equityHistory = closed
-    .slice()
-    .sort((a, b) => new Date(a.exit_at) - new Date(b.exit_at))
-    .reduce((acc, t, i) => {
-      const prev = acc[i - 1]?.equity ?? 10000;
-      acc.push({ time: t.exit_at?.slice(5, 16), equity: +(prev + (t.pnl || 0)).toFixed(2) });
-      return acc;
-    }, []);
+  const filtered = trades.filter(t => {
+    const stratOk = stratFilter === "all" || t.strategy_id === stratFilter;
+    const statusOk = statusTab === "all" || t.status === statusTab;
+    return stratOk && statusOk;
+  });
 
-  if (loading) return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0a0a0f", color: "#fff", fontFamily: "'IBM Plex Mono', monospace" }}>
-      <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: 13, color: "#4ade80", letterSpacing: 4, marginBottom: 8 }}>CONNECTING</div>
-        <div style={{ fontSize: 11, color: "#555" }}>loading bot data...</div>
-      </div>
-    </div>
-  );
-
-  const pnlColor = (v) => v > 0 ? "#4ade80" : v < 0 ? "#f87171" : "#888";
+  const totalGain = (account?.equity || 30000) - 30000;
+  const startingCap = 30000;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#0a0a0f", color: "#e2e8f0", fontFamily: "'IBM Plex Mono', monospace", padding: "24px" }}>
+    <div style={{ minHeight: "100vh", background: "#080810", color: "#e2e8f0", fontFamily: "'IBM Plex Mono', monospace" }}>
 
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 32 }}>
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <div style={{ padding: "20px 24px 16px", borderBottom: "0.5px solid #1e1e35", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <div>
-          <div style={{ fontSize: 11, color: "#4ade80", letterSpacing: 6, marginBottom: 6 }}>SPY DAY TRADING BOT</div>
-          <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: -1 }}>Dashboard</div>
+          <div style={{ fontSize: 9, color: "#a78bfa", letterSpacing: 6, marginBottom: 4 }}>TRADING BOT</div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>Paper Trading Dashboard</div>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 10, color: "#555", marginBottom: 4 }}>LAST UPDATE</div>
-          <div style={{ fontSize: 12, color: "#888" }}>{lastUpdate?.toLocaleTimeString()}</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end", marginTop: 6 }}>
-            <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ade80", animation: "pulse 2s infinite" }} />
-            <div style={{ fontSize: 11, color: "#4ade80" }}>LIVE</div>
+          <div style={{ fontSize: 28, fontWeight: 700, color: pnlColor(totalGain) }}>
+            {totalGain >= 0 ? "+" : ""}{fmt(totalGain)}
+          </div>
+          <div style={{ fontSize: 11, color: pnlColor(totalGain) }}>
+            {pct((totalGain / startingCap) * 100)} total return
+          </div>
+          <div style={{ fontSize: 9, color: "#555", marginTop: 2 }}>
+            {lastUpdate?.toLocaleTimeString()} · refreshes 5s
           </div>
         </div>
       </div>
 
-      {/* Account metrics */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 32 }}>
+      {/* ── Portfolio summary bar ───────────────────────────────────────────── */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, padding: "14px 24px" }}>
         {[
-          { label: "EQUITY",       value: `$${fmt(account?.equity)}`,          sub: "current value" },
-          { label: "BALANCE",      value: `$${fmt(account?.balance)}`,          sub: "cash available" },
-          { label: "TOTAL P&L",    value: `$${fmt(account?.total_pnl)}`,        sub: fmtPct((account?.total_pnl / 10000) * 100), color: pnlColor(account?.total_pnl) },
-          { label: "OPEN P&L",     value: `$${fmt(account?.open_pnl)}`,         sub: "unrealised",    color: pnlColor(account?.open_pnl) },
-          { label: "WIN RATE",     value: `${account?.win_rate?.toFixed(1)}%`,  sub: `${account?.total_trades} trades` },
-          { label: "OPEN TRADES",  value: open.length,                          sub: `max 3` },
-        ].map(({ label, value, sub, color }) => (
-          <div key={label} style={{ background: "#111118", border: "1px solid #1e1e2e", borderRadius: 8, padding: "16px" }}>
-            <div style={{ fontSize: 9, color: "#555", letterSpacing: 3, marginBottom: 8 }}>{label}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: color || "#e2e8f0", marginBottom: 4 }}>{value}</div>
-            <div style={{ fontSize: 10, color: "#555" }}>{sub}</div>
+          ["TOTAL CAPITAL", fmt(account?.equity || 30000), "#a78bfa"],
+          ["TOTAL P&L", fmt(account?.total_pnl), pnlColor(account?.total_pnl)],
+          ["WIN RATE", account?.total_trades > 0 ? `${account.win_rate}%` : "—", "#4ade80"],
+          ["TOTAL TRADES", account?.total_trades || 0, "#60a5fa"],
+        ].map(([label, val, color]) => (
+          <div key={label} style={{ background: "#0f0f1a", border: "0.5px solid #1e1e35", borderRadius: 8, padding: "12px 14px" }}>
+            <div style={{ fontSize: 8, color: "#555", letterSpacing: 2, marginBottom: 4 }}>{label}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color }}>{val}</div>
           </div>
         ))}
       </div>
 
-      {/* Equity curve */}
-      {equityHistory.length > 1 && (
-        <div style={{ background: "#111118", border: "1px solid #1e1e2e", borderRadius: 8, padding: 20, marginBottom: 32 }}>
-          <div style={{ fontSize: 9, color: "#555", letterSpacing: 3, marginBottom: 16 }}>EQUITY CURVE</div>
-          <ResponsiveContainer width="100%" height={160}>
-            <LineChart data={equityHistory}>
-              <XAxis dataKey="time" tick={{ fontSize: 9, fill: "#555" }} axisLine={false} tickLine={false} />
-              <YAxis domain={["auto", "auto"]} tick={{ fontSize: 9, fill: "#555" }} axisLine={false} tickLine={false} width={70} tickFormatter={v => `$${v.toLocaleString()}`} />
-              <Tooltip
-                contentStyle={{ background: "#0a0a0f", border: "1px solid #1e1e2e", borderRadius: 6, fontSize: 11 }}
-                formatter={v => [`$${fmt(v)}`, "Equity"]}
-              />
-              <ReferenceLine y={10000} stroke="#333" strokeDasharray="4 4" />
-              <Line type="monotone" dataKey="equity" stroke="#4ade80" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {/* Trades table */}
-      <div style={{ background: "#111118", border: "1px solid #1e1e2e", borderRadius: 8, overflow: "hidden" }}>
-        <div style={{ display: "flex", borderBottom: "1px solid #1e1e2e" }}>
-          {["open", "closed"].map(t => (
-            <button key={t} onClick={() => setTab(t)} style={{
-              padding: "12px 24px", fontSize: 10, letterSpacing: 3, fontFamily: "inherit",
-              background: tab === t ? "#1e1e2e" : "transparent",
-              color: tab === t ? "#4ade80" : "#555",
-              border: "none", cursor: "pointer", textTransform: "uppercase"
-            }}>
-              {t} ({t === "open" ? open.length : closed.length})
-            </button>
+      {/* ── Strategy breakdown cards ────────────────────────────────────────── */}
+      <div style={{ padding: "0 24px 16px" }}>
+        <div style={{ fontSize: 9, color: "#555", letterSpacing: 3, marginBottom: 10 }}>STRATEGY PERFORMANCE</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+          {strategies.map(s => (
+            <StrategyCard
+              key={s.strategy_id}
+              s={s}
+              active={stratFilter === s.strategy_id}
+              onClick={() => setStratFilter(prev => prev === s.strategy_id ? "all" : s.strategy_id)}
+            />
           ))}
         </div>
+      </div>
 
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid #1e1e2e" }}>
-                {["Symbol", "Side", "Entry", "Exit", "Qty", "P&L", "P&L%", "Regime", "Entry time", tab === "closed" ? "Exit time" : "Status"].map(h => (
-                  <th key={h} style={{ padding: "10px 16px", textAlign: "left", color: "#555", letterSpacing: 2, fontSize: 9, fontWeight: 400 }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {(tab === "open" ? open : closed).length === 0 ? (
-                <tr><td colSpan={10} style={{ padding: 32, textAlign: "center", color: "#555", fontSize: 11 }}>
-                  {tab === "open" ? "No open trades — waiting for market signals" : "No closed trades yet"}
-                </td></tr>
-              ) : (tab === "open" ? open : closed).map(t => (
-                <tr key={t.id} style={{ borderBottom: "1px solid #0f0f18" }}>
-                  <td style={{ padding: "12px 16px", color: "#e2e8f0", fontWeight: 700 }}>{t.symbol}</td>
-                  <td style={{ padding: "12px 16px" }}>
-                    <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: t.side === "long" ? "#052e16" : "#2d0a0a", color: t.side === "long" ? "#4ade80" : "#f87171" }}>
-                      {t.side?.toUpperCase()}
-                    </span>
-                  </td>
-                  <td style={{ padding: "12px 16px", color: "#888" }}>${fmt(t.entry_price)}</td>
-                  <td style={{ padding: "12px 16px", color: "#888" }}>{t.exit_price ? `$${fmt(t.exit_price)}` : "—"}</td>
-                  <td style={{ padding: "12px 16px", color: "#888" }}>{t.quantity?.toFixed(4)}</td>
-                  <td style={{ padding: "12px 16px", color: pnlColor(t.pnl), fontWeight: 700 }}>{t.pnl != null ? `$${fmt(t.pnl)}` : "—"}</td>
-                  <td style={{ padding: "12px 16px", color: pnlColor(t.pnl_pct) }}>{t.pnl_pct != null ? fmtPct(t.pnl_pct) : "—"}</td>
-                  <td style={{ padding: "12px 16px" }}>
-                    <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, background: "#1e1e2e", color: "#888" }}>{t.regime || "—"}</span>
-                  </td>
-                  <td style={{ padding: "12px 16px", color: "#555" }}>{t.entry_at?.slice(5, 16)}</td>
-                  <td style={{ padding: "12px 16px", color: tab === "closed" ? "#555" : "#4ade80", fontSize: tab === "open" ? 10 : 11 }}>
-                    {tab === "closed" ? t.exit_at?.slice(5, 16) : "● OPEN"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* ── Trade list ─────────────────────────────────────────────────────── */}
+      <div style={{ padding: "0 24px 24px" }}>
+        {/* Filter bar */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ fontSize: 9, color: "#555", letterSpacing: 3, marginRight: 4 }}>FILTER:</div>
+
+          {/* Status tabs */}
+          {["open", "closed", "all"].map(s => (
+            <button key={s} onClick={() => setStatusTab(s)} style={{
+              padding: "4px 12px", fontSize: 9, letterSpacing: 2, fontFamily: "inherit",
+              background: statusTab === s ? "#1e1e35" : "transparent",
+              color: statusTab === s ? "#a78bfa" : "#555",
+              border: `0.5px solid ${statusTab === s ? "#a78bfa" : "#1e1e35"}`,
+              borderRadius: 20, cursor: "pointer", textTransform: "uppercase",
+            }}>{s}</button>
+          ))}
+
+          <div style={{ width: 1, height: 16, background: "#1e1e35", margin: "0 4px" }} />
+
+          {/* Strategy filter */}
+          <button onClick={() => setStratFilter("all")} style={{
+            padding: "4px 12px", fontSize: 9, letterSpacing: 2, fontFamily: "inherit",
+            background: stratFilter === "all" ? "#1e1e35" : "transparent",
+            color: stratFilter === "all" ? "#a78bfa" : "#555",
+            border: `0.5px solid ${stratFilter === "all" ? "#a78bfa" : "#1e1e35"}`,
+            borderRadius: 20, cursor: "pointer",
+          }}>ALL STRATEGIES</button>
+
+          {strategies.map(s => {
+            const st = STRATEGIES[s.strategy_id];
+            return (
+              <button key={s.strategy_id} onClick={() => setStratFilter(prev => prev === s.strategy_id ? "all" : s.strategy_id)} style={{
+                padding: "4px 12px", fontSize: 9, letterSpacing: 1, fontFamily: "inherit",
+                background: stratFilter === s.strategy_id ? st.bg : "transparent",
+                color: stratFilter === s.strategy_id ? st.color : "#555",
+                border: `0.5px solid ${stratFilter === s.strategy_id ? st.color : "#1e1e35"}`,
+                borderRadius: 20, cursor: "pointer", whiteSpace: "nowrap",
+              }}>{st?.name || s.strategy_id}</button>
+            );
+          })}
+
+          <span style={{ marginLeft: "auto", fontSize: 9, color: "#555" }}>
+            {filtered.length} trade{filtered.length !== 1 ? "s" : ""}
+          </span>
         </div>
+
+        {/* Trades */}
+        {filtered.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 40, color: "#555", fontSize: 12 }}>
+            <div style={{ marginBottom: 8 }}>No trades yet</div>
+            <div style={{ fontSize: 10, color: "#333" }}>
+              Test the pipeline: POST /webhook/test
+            </div>
+          </div>
+        ) : (
+          filtered.map(t => (
+            <TradeRow key={t.id} trade={t} onClose={handleClose} />
+          ))
+        )}
       </div>
 
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background: #0a0a0f; }
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-        ::-webkit-scrollbar { width: 4px; height: 4px; }
-        ::-webkit-scrollbar-track { background: #0a0a0f; }
-        ::-webkit-scrollbar-thumb { background: #1e1e2e; border-radius: 2px; }
+        body { background: #080810; }
       `}</style>
     </div>
   );

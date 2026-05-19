@@ -1,18 +1,21 @@
 import os, json
 import httpx
 from fastapi import APIRouter, HTTPException
-from models.schemas import WebhookPayload
 from core.indicators import get_all_indicators
 from core.regime import detect_regime
-from core.paper_trader import get_account, get_active_strategy, open_trade, close_trade, get_open_trades
+from core.paper_trader import get_strategy_account, get_active_strategy, open_trade, close_trade, get_open_trades
 from core.llm import decide_trade, write_post_mortem
 from database import get_connection
 
 router = APIRouter(prefix="/webhook", tags=["webhook"])
 
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "changeme")
-# Paper trading mode — no market hours restriction
-PAPER_TRADING  = os.getenv("PAPER_TRADING", "true").lower() == "true"
+
+STRATEGY_NAMES = {
+    "ema_cross":    "EMA Cross + VWAP",
+    "orb":          "Opening Range Breakout",
+    "ema_pullback": "EMA 21 Pullback",
+}
 
 async def send_telegram(message: str):
     token   = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -21,84 +24,75 @@ async def send_telegram(message: str):
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     async with httpx.AsyncClient() as client:
-        await client.post(url, json={
-            "chat_id":    chat_id,
-            "text":       message,
-            "parse_mode": "HTML"
-        })
+        await client.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"})
 
 
 @router.post("/test")
 async def test_trade(body: dict = None):
-    """
-    Force open a paper trade for testing — bypasses Claude and indicator checks.
-    Use this to verify the full pipeline: trade opens, shows in dashboard,
-    Telegram fires, close it, P&L updates.
-    """
+    """Force open a paper trade for pipeline testing — bypasses Claude."""
     if body is None:
         body = {}
 
-    symbol = body.get("symbol", "SPY").upper()
-    side   = body.get("side", "long")
-    price  = body.get("price", 738.52)
+    symbol      = body.get("symbol", "SPY").upper()
+    side        = body.get("side", "long")
+    price       = body.get("price", 738.52)
+    strategy_id = body.get("strategy", "ema_cross")
 
-    reasoning = "TEST TRADE — manually triggered to verify pipeline. Not based on real signal."
-    regime    = "ranging"
+    reasoning  = f"TEST TRADE — manually triggered for {STRATEGY_NAMES.get(strategy_id, strategy_id)} pipeline verification."
     indicators = {"test": True, "price": price}
 
-    trade_id, msg = open_trade(symbol, side, price, indicators, reasoning, regime)
+    trade_id, msg = open_trade(symbol, side, price, indicators, reasoning, "test", strategy_id)
 
     if not trade_id:
         return {"status": "blocked", "reason": msg}
 
     await send_telegram(
         f"🧪 <b>TEST TRADE OPENED</b>\n"
-        f"Symbol: {symbol}\n"
-        f"Side: {side.upper()}\n"
-        f"Price: ${price}\n"
-        f"This is a test trade to verify the pipeline."
+        f"Strategy: {STRATEGY_NAMES.get(strategy_id, strategy_id)}\n"
+        f"Symbol: {symbol} | Side: {side.upper()} | Price: ${price}\n"
+        f"Close with: /trades/{trade_id}/close?price={round(price + 2, 2)}"
     )
 
     return {
-        "status":   "opened",
-        "trade_id": trade_id,
-        "symbol":   symbol,
-        "side":     side,
-        "price":    price,
-        "message":  "Test trade opened. Check dashboard and Telegram. Use /trades/{id}/close to close it.",
-        "close_url": f"/trades/{trade_id}/close?price={price + 1.5}"
+        "status":      "opened",
+        "trade_id":    trade_id,
+        "symbol":      symbol,
+        "side":        side,
+        "price":       price,
+        "strategy_id": strategy_id,
+        "close_url":   f"/trades/{trade_id}/close?price={round(price + 2, 2)}"
     }
 
 
 @router.post("/tradingview")
-async def tradingview_webhook(payload: WebhookPayload):
-    if payload.secret != WEBHOOK_SECRET:
+async def tradingview_webhook(payload: dict):
+    # Validate secret
+    if payload.get("secret") != WEBHOOK_SECRET:
         raise HTTPException(status_code=403, detail="Invalid webhook secret")
 
-    symbol = payload.symbol.upper()
-    signal = payload.signal.lower()
-    price  = payload.price
+    symbol      = payload.get("symbol", "SPY").upper()
+    signal      = payload.get("signal", "").lower()
+    price       = float(payload.get("price", 0))
+    strategy_id = payload.get("strategy", "ema_cross")  # which strategy fired
 
     conn = get_connection()
     conn.execute("""
         INSERT INTO signals (symbol, source, signal_type, payload)
         VALUES (?, 'tradingview', ?, ?)
-    """, (symbol, signal, json.dumps(payload.model_dump())))
+    """, (symbol, signal, json.dumps(payload)))
     conn.commit()
     conn.close()
 
     # ── Close signal ──────────────────────────────────────────────────────────
     if signal == "close":
-        open_trades   = get_open_trades()
+        open_trades   = get_open_trades(strategy_id)
         symbol_trades = [t for t in open_trades if t["symbol"] == symbol]
         results = []
         for trade in symbol_trades:
             pnl, msg = close_trade(trade["id"], price)
             if pnl is not None:
                 conn      = get_connection()
-                trade_row = dict(conn.execute(
-                    "SELECT * FROM trades WHERE id = ?", (trade["id"],)
-                ).fetchone())
+                trade_row = dict(conn.execute("SELECT * FROM trades WHERE id=?", (trade["id"],)).fetchone())
                 conn.close()
                 pm = write_post_mortem(trade_row, trade.get("indicators") or {})
                 conn = get_connection()
@@ -111,53 +105,50 @@ async def tradingview_webhook(payload: WebhookPayload):
                 results.append({"trade_id": trade["id"], "pnl": pnl})
                 await send_telegram(
                     f"🔴 <b>TRADE CLOSED</b>\n"
-                    f"Symbol: {symbol}\n"
-                    f"PnL: ${pnl:.2f}\n"
-                    f"{'✅ WIN' if pnl > 0 else '❌ LOSS'}"
+                    f"Strategy: {STRATEGY_NAMES.get(strategy_id, strategy_id)}\n"
+                    f"Symbol: {symbol} | Exit: ${price}\n"
+                    f"PnL: ${pnl:.2f} {'✅ WIN' if pnl > 0 else '❌ LOSS'}"
                 )
         return {"status": "closed", "results": results}
 
     # ── Buy / Sell signal ─────────────────────────────────────────────────────
     indicators = get_all_indicators(symbol)
     regime     = detect_regime(symbol)
-    account    = get_account()
+    account    = get_strategy_account(strategy_id)
     strategy   = get_active_strategy()
 
     decision = decide_trade(symbol, signal, indicators, regime, account, strategy)
 
     if decision["action"] != "open" or decision["confidence"] < strategy.get("entry_threshold", 0.60):
         return {
-            "status":     "skipped",
-            "reason":     decision["reasoning"],
-            "confidence": decision["confidence"]
+            "status":      "skipped",
+            "strategy_id": strategy_id,
+            "reason":      decision["reasoning"],
+            "confidence":  decision["confidence"]
         }
 
-    side     = decision["side"] or ("long" if signal == "buy" else "short")
-    trade_id, msg = open_trade(
-        symbol, side, price,
-        indicators, decision["reasoning"], regime
-    )
+    side = decision["side"] or ("long" if signal == "buy" else "short")
+    trade_id, msg = open_trade(symbol, side, price, indicators, decision["reasoning"], regime, strategy_id)
 
     if not trade_id:
         return {"status": "blocked", "reason": msg}
 
     await send_telegram(
         f"🟢 <b>TRADE OPENED</b>\n"
-        f"Symbol: {symbol}\n"
-        f"Side: {side.upper()}\n"
-        f"Price: ${price}\n"
-        f"Regime: {regime}\n"
-        f"Confidence: {decision['confidence']}\n"
-        f"Reason: {decision['reasoning'][:200]}"
+        f"Strategy: {STRATEGY_NAMES.get(strategy_id, strategy_id)}\n"
+        f"Symbol: {symbol} | Side: {side.upper()} | Price: ${price}\n"
+        f"Regime: {regime} | Confidence: {decision['confidence']:.0%}\n"
+        f"Reason: {decision['reasoning'][:150]}"
     )
 
     return {
-        "status":     "opened",
-        "trade_id":   trade_id,
-        "symbol":     symbol,
-        "side":       side,
-        "price":      price,
-        "regime":     regime,
-        "confidence": decision["confidence"],
-        "reasoning":  decision["reasoning"]
+        "status":      "opened",
+        "trade_id":    trade_id,
+        "symbol":      symbol,
+        "side":        side,
+        "price":       price,
+        "strategy_id": strategy_id,
+        "regime":      regime,
+        "confidence":  decision["confidence"],
+        "reasoning":   decision["reasoning"]
     }
