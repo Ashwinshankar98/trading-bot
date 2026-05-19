@@ -77,9 +77,9 @@ bgcolor(uptrend   ? color.new(color.green, 97) : na)
 bgcolor(downtrend ? color.new(color.red,   97) : na)
 
 // ═══════════════════════════════════════════════════════════════
-// ALERTS
+// ALERTS — message is pre-filled JSON for webhook
 // ═══════════════════════════════════════════════════════════════
-alertcondition(buy_signal,   title="S3 BUY",   message="S3_BUY")
-alertcondition(sell_signal,  title="S3 SELL",  message="S3_SELL")
-alertcondition(close_signal, title="S3 CLOSE", message="S3_CLOSE")
-alertcondition(eod_time,     title="S3 EOD",   message="S3_EOD")
+alertcondition(buy_signal,   title="S3 BUY",   message='{"secret":"mysecret123","symbol":"{{ticker}}","signal":"buy","price":{{close}},"timeframe":"5m","strategy":"ema_pullback"}')
+alertcondition(sell_signal,  title="S3 SELL",  message='{"secret":"mysecret123","symbol":"{{ticker}}","signal":"sell","price":{{close}},"timeframe":"5m","strategy":"ema_pullback"}')
+alertcondition(close_signal, title="S3 CLOSE", message='{"secret":"mysecret123","symbol":"{{ticker}}","signal":"close","price":{{close}},"timeframe":"5m","strategy":"ema_pullback"}')
+alertcondition(eod_time,     title="S3 EOD",   message='{"secret":"mysecret123","symbol":"{{ticker}}","signal":"close","price":{{close}},"timeframe":"5m","strategy":"ema_pullback"}')

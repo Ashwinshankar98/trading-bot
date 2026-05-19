@@ -81,9 +81,9 @@ plotshape(sell_signal,  title="ORB Sell", style=shape.labeldown, location=locati
 plotshape(close_signal, title="CLOSE",    style=shape.xcross,    location=location.abovebar, color=color.white, text="EXIT",     textcolor=color.white, size=size.small)
 
 // ═══════════════════════════════════════════════════════════════
-// ALERTS
+// ALERTS — message is pre-filled JSON for webhook
 // ═══════════════════════════════════════════════════════════════
-alertcondition(buy_signal,   title="S2 BUY",   message="S2_BUY")
-alertcondition(sell_signal,  title="S2 SELL",  message="S2_SELL")
-alertcondition(close_signal, title="S2 CLOSE", message="S2_CLOSE")
-alertcondition(eod_time,     title="S2 EOD",   message="S2_EOD")
+alertcondition(buy_signal,   title="S2 BUY",   message='{"secret":"mysecret123","symbol":"{{ticker}}","signal":"buy","price":{{close}},"timeframe":"5m","strategy":"orb"}')
+alertcondition(sell_signal,  title="S2 SELL",  message='{"secret":"mysecret123","symbol":"{{ticker}}","signal":"sell","price":{{close}},"timeframe":"5m","strategy":"orb"}')
+alertcondition(close_signal, title="S2 CLOSE", message='{"secret":"mysecret123","symbol":"{{ticker}}","signal":"close","price":{{close}},"timeframe":"5m","strategy":"orb"}')
+alertcondition(eod_time,     title="S2 EOD",   message='{"secret":"mysecret123","symbol":"{{ticker}}","signal":"close","price":{{close}},"timeframe":"5m","strategy":"orb"}')
