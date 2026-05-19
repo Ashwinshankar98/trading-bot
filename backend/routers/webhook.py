@@ -1,6 +1,6 @@
 import os, json
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from core.indicators import get_all_indicators
 from core.regime import detect_regime
 from core.paper_trader import get_strategy_account, get_active_strategy, open_trade, close_trade, get_open_trades
@@ -64,30 +64,12 @@ async def test_trade(body: dict = None):
     }
 
 
-@router.post("/tradingview")
-async def tradingview_webhook(payload: dict):
-    # Validate secret
-    if payload.get("secret") != WEBHOOK_SECRET:
-        raise HTTPException(status_code=403, detail="Invalid webhook secret")
-
-    symbol      = payload.get("symbol", "SPY").upper()
-    signal      = payload.get("signal", "").lower()
-    price       = float(payload.get("price", 0))
-    strategy_id = payload.get("strategy", "ema_cross")  # which strategy fired
-
-    conn = get_connection()
-    conn.execute("""
-        INSERT INTO signals (symbol, source, signal_type, payload)
-        VALUES (?, 'tradingview', ?, ?)
-    """, (symbol, signal, json.dumps(payload)))
-    conn.commit()
-    conn.close()
-
+async def _process_signal(symbol: str, signal: str, price: float, strategy_id: str):
+    """Process trade logic in the background so TradingView gets an immediate 200."""
     # ── Close signal ──────────────────────────────────────────────────────────
     if signal == "close":
         open_trades   = get_open_trades(strategy_id)
         symbol_trades = [t for t in open_trades if t["symbol"] == symbol]
-        results = []
         for trade in symbol_trades:
             pnl, msg = close_trade(trade["id"], price)
             if pnl is not None:
@@ -102,14 +84,13 @@ async def tradingview_webhook(payload: dict):
                 """, (trade["id"], pm["what_worked"], pm["what_failed"], pm["market_notes"]))
                 conn.commit()
                 conn.close()
-                results.append({"trade_id": trade["id"], "pnl": pnl})
                 await send_telegram(
                     f"🔴 <b>TRADE CLOSED</b>\n"
                     f"Strategy: {STRATEGY_NAMES.get(strategy_id, strategy_id)}\n"
                     f"Symbol: {symbol} | Exit: ${price}\n"
                     f"PnL: ${pnl:.2f} {'✅ WIN' if pnl > 0 else '❌ LOSS'}"
                 )
-        return {"status": "closed", "results": results}
+        return
 
     # ── Buy / Sell signal ─────────────────────────────────────────────────────
     indicators = get_all_indicators(symbol)
@@ -120,18 +101,13 @@ async def tradingview_webhook(payload: dict):
     decision = decide_trade(symbol, signal, indicators, regime, account, strategy)
 
     if decision["action"] != "open" or decision["confidence"] < strategy.get("entry_threshold", 0.60):
-        return {
-            "status":      "skipped",
-            "strategy_id": strategy_id,
-            "reason":      decision["reasoning"],
-            "confidence":  decision["confidence"]
-        }
+        return
 
     side = decision["side"] or ("long" if signal == "buy" else "short")
     trade_id, msg = open_trade(symbol, side, price, indicators, decision["reasoning"], regime, strategy_id)
 
     if not trade_id:
-        return {"status": "blocked", "reason": msg}
+        return
 
     await send_telegram(
         f"🟢 <b>TRADE OPENED</b>\n"
@@ -141,14 +117,25 @@ async def tradingview_webhook(payload: dict):
         f"Reason: {decision['reasoning'][:150]}"
     )
 
-    return {
-        "status":      "opened",
-        "trade_id":    trade_id,
-        "symbol":      symbol,
-        "side":        side,
-        "price":       price,
-        "strategy_id": strategy_id,
-        "regime":      regime,
-        "confidence":  decision["confidence"],
-        "reasoning":   decision["reasoning"]
-    }
+
+@router.post("/tradingview")
+async def tradingview_webhook(payload: dict, background_tasks: BackgroundTasks):
+    if payload.get("secret") != WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid webhook secret")
+
+    symbol      = payload.get("symbol", "SPY").upper()
+    signal      = payload.get("signal", "").lower()
+    price       = float(payload.get("price", 0))
+    strategy_id = payload.get("strategy", "ema_cross")
+
+    conn = get_connection()
+    conn.execute("""
+        INSERT INTO signals (symbol, source, signal_type, payload)
+        VALUES (?, 'tradingview', ?, ?)
+    """, (symbol, signal, json.dumps(payload)))
+    conn.commit()
+    conn.close()
+
+    # Acknowledge immediately — TradingView won't wait for yfinance + Claude
+    background_tasks.add_task(_process_signal, symbol, signal, price, strategy_id)
+    return {"status": "received", "symbol": symbol, "signal": signal, "strategy": strategy_id}
