@@ -81,9 +81,14 @@ plotshape(sell_signal,  title="ORB Sell", style=shape.labeldown, location=locati
 plotshape(close_signal, title="CLOSE",    style=shape.xcross,    location=location.abovebar, color=color.white, text="EXIT",     textcolor=color.white, size=size.small)
 
 // ═══════════════════════════════════════════════════════════════
-// ALERTS — message is pre-filled JSON for webhook
+// ALERTS — single alert() call per bar, script sends correct JSON
+// Create ONE TradingView alert: condition = "Any alert() function call"
 // ═══════════════════════════════════════════════════════════════
-alertcondition(buy_signal,   title="S2 BUY",   message='{"secret":"mysecret123","symbol":"{{ticker}}","signal":"buy","price":{{close}},"timeframe":"5m","strategy":"orb"}')
-alertcondition(sell_signal,  title="S2 SELL",  message='{"secret":"mysecret123","symbol":"{{ticker}}","signal":"sell","price":{{close}},"timeframe":"5m","strategy":"orb"}')
-alertcondition(close_signal, title="S2 CLOSE", message='{"secret":"mysecret123","symbol":"{{ticker}}","signal":"close","price":{{close}},"timeframe":"5m","strategy":"orb"}')
-alertcondition(eod_time,     title="S2 EOD",   message='{"secret":"mysecret123","symbol":"{{ticker}}","signal":"close","price":{{close}},"timeframe":"5m","strategy":"orb"}')
+var string BASE = '{"secret":"mysecret123","symbol":"{{ticker}}","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"orb","signal":'
+
+if buy_signal
+    alert(BASE + '"buy"}',   alert.freq_once_per_bar_close)
+if sell_signal
+    alert(BASE + '"sell"}',  alert.freq_once_per_bar_close)
+if close_signal
+    alert(BASE + '"close"}', alert.freq_once_per_bar_close)
