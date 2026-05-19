@@ -3,6 +3,8 @@ uvicorn[standard]==0.30.0
 python-dotenv==1.0.1
 anthropic==0.34.0
 yfinance==0.2.65
+alpaca-py==0.43.4
+scipy==1.13.1
 pandas==2.2.3
 numpy==2.1.0
 httpx==0.27.0
