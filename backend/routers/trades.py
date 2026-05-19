@@ -52,9 +52,29 @@ def get_trade_journal(trade_id: int):
     return dict(row) if row else {}
 
 @router.post("/{trade_id}/close")
-def manual_close(trade_id: int, price: float):
-    from core.paper_trader import close_trade
+async def manual_close(trade_id: int, price: float):
+    import httpx, os
     pnl, msg = close_trade(trade_id, price)
+    if pnl is not None:
+        # Send Telegram notification
+        token   = os.getenv("TELEGRAM_BOT_TOKEN")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        if token and chat_id:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": (
+                            f"🔴 <b>TRADE CLOSED</b>\n"
+                            f"Trade ID: {trade_id}\n"
+                            f"Exit Price: ${price}\n"
+                            f"PnL: ${pnl:.2f}\n"
+                            f"{'✅ WIN' if pnl > 0 else '❌ LOSS'}"
+                        ),
+                        "parse_mode": "HTML"
+                    }
+                )
     return {"pnl": pnl, "message": msg}
 
 @router.get("/test-telegram")
