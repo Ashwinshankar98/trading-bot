@@ -105,18 +105,36 @@ def atr(df: pd.DataFrame, period=14) -> float:
 def get_all_indicators(symbol: str) -> dict:
     """Fetch OHLCV and compute all indicators for a symbol."""
     try:
-        df = fetch_ohlcv(symbol)
+        # Try 5d first, fall back to 1mo if market is closed
+        df = fetch_ohlcv(symbol, period="5d", interval="1h")
+        if df.empty or len(df) < 5:
+            df = fetch_ohlcv(symbol, period="1mo", interval="1d")
+        if df.empty:
+            return {"error": "no data available", "symbol": symbol}
+
         close = df["Close"]
+        last_close = round(float(close.iloc[-1]), 4)
+
+        # EMA cross — need at least 21 bars
+        ema_cross_val = ema_cross(close) if len(close) >= 21 else {
+            "ema_fast": None, "ema_slow": None,
+            "bullish_cross": False, "bearish_cross": False
+        }
+        ema_cross_val["price_above_slow"] = (
+            last_close > ema_cross_val["ema_slow"]
+            if ema_cross_val["ema_slow"] else None
+        )
+
         return {
-            "symbol":   symbol,
-            "price":    round(float(close.iloc[-1]), 4),
-            "rsi":      rsi(close),
-            "macd":     macd(close),
-            "ema_cross": ema_cross(close),
-            "vwap":     vwap(df),
-            "bollinger": bollinger_bands(close),
-            "adx":      adx(df),
-            "atr":      atr(df),
+            "symbol":    symbol,
+            "price":     last_close,
+            "rsi":       rsi(close) if len(close) >= 14 else None,
+            "macd":      macd(close) if len(close) >= 26 else None,
+            "ema_cross": ema_cross_val,
+            "vwap":      vwap(df),
+            "bollinger": bollinger_bands(close) if len(close) >= 20 else None,
+            "adx":       adx(df) if len(df) >= 14 else None,
+            "atr":       atr(df) if len(df) >= 14 else None,
         }
     except Exception as e:
         return {"error": str(e), "symbol": symbol}
