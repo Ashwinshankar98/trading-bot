@@ -104,6 +104,7 @@ def init_db():
             "stop_loss_pct": 0.02,
             "take_profit_pct": 0.04,
             "max_open_trades": 3,
+            "max_option_risk_pct": 0.05,
             "regime_filters": {
                 "trending":  ["ema_cross", "macd", "vwap"],
                 "ranging":   ["rsi", "bollinger"],
@@ -126,6 +127,24 @@ def init_db():
     );
 
     """)
+
+    # Options columns (added later — safe to run on existing DB)
+    for col, definition in [
+        ("asset_class",       "TEXT    NOT NULL DEFAULT 'stock'"),
+        ("alpaca_order_id",   "TEXT"),
+        ("option_symbol",     "TEXT"),
+        ("strike",            "REAL"),
+        ("option_expiry",     "TEXT"),
+        ("option_type",       "TEXT"),
+        ("entry_premium",     "REAL"),
+        ("exit_premium",      "REAL"),
+        ("contracts",         "INTEGER"),
+        ("underlying_price",  "REAL"),
+    ]:
+        try:
+            c.execute(f"ALTER TABLE trades ADD COLUMN {col} {definition}")
+        except Exception:
+            pass  # column already exists
 
     conn.commit()
     conn.close()

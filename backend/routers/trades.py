@@ -3,6 +3,7 @@ import httpx
 from fastapi import APIRouter
 from database import get_connection
 from core.paper_trader import get_all_strategy_accounts
+from core.options import get_positions_live_pnl
 
 router = APIRouter(prefix="/trades", tags=["trades"])
 
@@ -18,7 +19,23 @@ def list_trades(status: str = "all", strategy: str = "all", limit: int = 100):
     else:
         rows = conn.execute("SELECT * FROM trades WHERE status=? AND strategy_id=? ORDER BY entry_at DESC LIMIT ?", (status, strategy, limit)).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+
+    trades = [dict(r) for r in rows]
+
+    # Inject live P&L from Alpaca for open options positions
+    open_options = [t for t in trades if t.get("status") == "open" and t.get("asset_class") == "option"]
+    if open_options:
+        live_pnl = get_positions_live_pnl()
+        for trade in trades:
+            if trade.get("asset_class") == "option" and trade.get("status") == "open":
+                sym = trade.get("option_symbol")
+                if sym and sym in live_pnl:
+                    pos = live_pnl[sym]
+                    trade["live_pnl"]        = pos["unrealized_pnl"]
+                    trade["live_pnl_pct"]    = pos["unrealized_plpc"]
+                    trade["current_premium"] = pos["current_price"]
+
+    return trades
 
 @router.get("/account")
 def get_account_summary():

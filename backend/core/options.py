@@ -11,9 +11,12 @@ from datetime import date, datetime, timezone
 from scipy.stats import norm
 from scipy.optimize import brentq
 
+import asyncio
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import GetOptionContractsRequest
-from alpaca.trading.enums import ContractType
+from alpaca.trading.requests import (
+    GetOptionContractsRequest, MarketOrderRequest, GetOrderByIdRequest
+)
+from alpaca.trading.enums import ContractType, OrderSide, TimeInForce
 from alpaca.data.historical.option import OptionHistoricalDataClient
 from alpaca.data.requests import OptionSnapshotRequest
 
@@ -186,3 +189,72 @@ def get_option_candidates(spy_price: float, signal: str, expiry: date = None) ->
     # Sort: prefer near-ATM, tight spread
     candidates.sort(key=lambda x: (abs(x["strike"] - spy_price), x["spread_pct"]))
     return candidates[:CONTRACTS_FOR_CLAUDE]
+
+
+# ── Order submission ───────────────────────────────────────────────────────────
+
+async def submit_option_order(option_symbol: str, contracts: int, action: str = "buy") -> dict:
+    """Submit a market order to Alpaca and wait up to 10s for fill."""
+    trading, _ = _get_clients()
+    order_req = MarketOrderRequest(
+        symbol=option_symbol,
+        qty=contracts,
+        side=OrderSide.BUY if action == "buy" else OrderSide.SELL,
+        time_in_force=TimeInForce.DAY,
+    )
+    order = trading.submit_order(order_req)
+    order_id = str(order.id)
+    print(f"[OPTIONS] Submitted {action} {contracts}x {option_symbol} | order_id={order_id}", flush=True)
+
+    # Poll for fill
+    for _ in range(20):
+        await asyncio.sleep(0.5)
+        order = trading.get_order_by_id(order_id)
+        if order.status.value == "filled":
+            fill_price = float(order.filled_avg_price)
+            print(f"[OPTIONS] Filled @ ${fill_price}", flush=True)
+            return {"order_id": order_id, "fill_price": fill_price,
+                    "contracts": int(float(order.filled_qty)), "status": "filled"}
+
+    print(f"[OPTIONS] Order not filled in 10s, status={order.status}", flush=True)
+    return {"order_id": order_id, "fill_price": None,
+            "contracts": contracts, "status": str(order.status)}
+
+
+def get_current_option_quote(option_symbol: str) -> float | None:
+    """Return mid-price for an option symbol, or None if unavailable."""
+    try:
+        _, data_client = _get_clients()
+        snaps = data_client.get_option_snapshot(
+            OptionSnapshotRequest(symbol_or_symbols=[option_symbol])
+        )
+        snap = snaps.get(option_symbol)
+        if snap and snap.latest_quote:
+            q = snap.latest_quote
+            if q.bid_price and q.ask_price:
+                return round((float(q.bid_price) + float(q.ask_price)) / 2, 4)
+    except Exception:
+        pass
+    return None
+
+
+def get_positions_live_pnl() -> dict:
+    """
+    Fetch all open Alpaca positions and return live P&L keyed by symbol.
+    Used by the trades endpoint to inject real-time options P&L.
+    """
+    try:
+        trading, _ = _get_clients()
+        positions = trading.get_all_positions()
+        return {
+            pos.symbol: {
+                "unrealized_pnl":    round(float(pos.unrealized_pl), 2),
+                "unrealized_plpc":   round(float(pos.unrealized_plpc) * 100, 2),
+                "current_price":     round(float(pos.current_price), 4),
+                "market_value":      round(float(pos.market_value), 2),
+            }
+            for pos in positions
+        }
+    except Exception as e:
+        print(f"[OPTIONS] get_positions_live_pnl error: {e}", flush=True)
+        return {}

@@ -81,9 +81,13 @@ function StrategyCard({ s, active, onClick }) {
 
 // ── Trade Row ─────────────────────────────────────────────────────────────────
 function TradeRow({ trade, onClose }) {
-  const st = STRATEGIES[trade.strategy_id] || STRATEGIES.all;
-  const isOpen = trade.status === "open";
-  const pnl = trade.pnl ?? null;
+  const st       = STRATEGIES[trade.strategy_id] || STRATEGIES.all;
+  const isOpen   = trade.status === "open";
+  const isOption = trade.asset_class === "option";
+  const closedPnl = trade.pnl ?? null;
+  const livePnl   = trade.live_pnl ?? null;
+  const displayPnl   = isOpen ? livePnl : closedPnl;
+  const displayPnlPct = isOpen ? trade.live_pnl_pct : trade.pnl_pct;
 
   return (
     <div style={{
@@ -98,21 +102,64 @@ function TradeRow({ trade, onClose }) {
             <span style={{ background: st.bg, color: st.color, fontSize: 9, padding: "2px 7px", borderRadius: 4, fontWeight: 700, letterSpacing: 1 }}>
               {st.name}
             </span>
+            {isOption && (
+              <span style={{ background: "#1a0a2e", color: "#c084fc", fontSize: 9, padding: "2px 7px", borderRadius: 4, fontWeight: 700, letterSpacing: 1 }}>
+                OPTION
+              </span>
+            )}
             <span style={{ background: trade.side === "long" ? "#052e16" : "#2d0a0a", color: trade.side === "long" ? "#4ade80" : "#f87171", fontSize: 10, padding: "2px 7px", borderRadius: 4, fontWeight: 700 }}>
               {trade.side?.toUpperCase()}
             </span>
-            <span style={{ fontSize: 12, fontWeight: 700, color: "#f1f5f9" }}>{trade.symbol}</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#f1f5f9" }}>
+              {isOption ? trade.option_symbol : trade.symbol}
+            </span>
             <span style={{ fontSize: 10, color: isOpen ? "#4ade80" : "#555", background: isOpen ? "#052e16" : "#1a1a1a", padding: "1px 7px", borderRadius: 10 }}>
               {isOpen ? "● OPEN" : "CLOSED"}
             </span>
           </div>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 11, color: "#aaa" }}>Entry: <b style={{ color: "#e2e8f0" }}>${trade.entry_price}</b></span>
-            {trade.exit_price && <span style={{ fontSize: 11, color: "#aaa" }}>Exit: <b style={{ color: "#e2e8f0" }}>${trade.exit_price}</b></span>}
-            <span style={{ fontSize: 11, color: "#aaa" }}>Qty: <b style={{ color: "#e2e8f0" }}>{trade.quantity}</b></span>
-            {trade.stop_loss && <span style={{ fontSize: 11, color: "#f87171" }}>SL: ${trade.stop_loss}</span>}
-            {trade.take_profit && <span style={{ fontSize: 11, color: "#4ade80" }}>TP: ${trade.take_profit}</span>}
-          </div>
+
+          {/* Stock fields */}
+          {!isOption && (
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 11, color: "#aaa" }}>Entry: <b style={{ color: "#e2e8f0" }}>${trade.entry_price}</b></span>
+              {trade.exit_price && <span style={{ fontSize: 11, color: "#aaa" }}>Exit: <b style={{ color: "#e2e8f0" }}>${trade.exit_price}</b></span>}
+              <span style={{ fontSize: 11, color: "#aaa" }}>Qty: <b style={{ color: "#e2e8f0" }}>{trade.quantity}</b></span>
+              {trade.stop_loss && <span style={{ fontSize: 11, color: "#f87171" }}>SL: ${trade.stop_loss}</span>}
+              {trade.take_profit && <span style={{ fontSize: 11, color: "#4ade80" }}>TP: ${trade.take_profit}</span>}
+            </div>
+          )}
+
+          {/* Options fields */}
+          {isOption && (() => {
+            let greeks = {};
+            try { greeks = JSON.parse(trade.indicators || "{}"); } catch {}
+            return (
+              <div>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 4 }}>
+                  <span style={{ fontSize: 11, color: "#aaa" }}>Strike: <b style={{ color: "#e2e8f0" }}>${trade.strike}</b></span>
+                  <span style={{ fontSize: 11, color: "#aaa" }}>Expiry: <b style={{ color: "#e2e8f0" }}>{trade.option_expiry}</b></span>
+                  <span style={{ fontSize: 11, color: "#c084fc" }}>{trade.option_type?.toUpperCase()}</span>
+                  <span style={{ fontSize: 11, color: "#aaa" }}>Contracts: <b style={{ color: "#e2e8f0" }}>{trade.contracts}</b></span>
+                  <span style={{ fontSize: 11, color: "#aaa" }}>SPY @ entry: <b style={{ color: "#e2e8f0" }}>${trade.underlying_price}</b></span>
+                </div>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 4 }}>
+                  <span style={{ fontSize: 11, color: "#aaa" }}>Entry premium: <b style={{ color: "#e2e8f0" }}>${trade.entry_premium}</b></span>
+                  {trade.current_premium && <span style={{ fontSize: 11, color: "#aaa" }}>Current: <b style={{ color: "#e2e8f0" }}>${trade.current_premium}</b></span>}
+                  {trade.exit_premium && <span style={{ fontSize: 11, color: "#aaa" }}>Exit: <b style={{ color: "#e2e8f0" }}>${trade.exit_premium}</b></span>}
+                  <span style={{ fontSize: 11, color: "#aaa" }}>Cost: <b style={{ color: "#e2e8f0" }}>${((trade.entry_premium || 0) * 100 * (trade.contracts || 1)).toFixed(0)}</b></span>
+                </div>
+                {(greeks.delta || greeks.iv) && (
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    {greeks.delta != null && <span style={{ fontSize: 10, color: "#555" }}>Δ {greeks.delta}</span>}
+                    {greeks.theta != null && <span style={{ fontSize: 10, color: "#f87171" }}>θ ${greeks.theta?.toFixed(3)}/day</span>}
+                    {greeks.iv != null && <span style={{ fontSize: 10, color: "#555" }}>IV {(greeks.iv * 100).toFixed(1)}%</span>}
+                    {greeks.vega != null && <span style={{ fontSize: 10, color: "#555" }}>ν ${greeks.vega?.toFixed(3)}/1%</span>}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           <div style={{ fontSize: 10, color: "#555", marginTop: 4 }}>
             {trade.entry_at?.slice(0, 16)} UTC
             {trade.exit_at ? ` → ${trade.exit_at?.slice(0, 16)} UTC` : ""}
@@ -121,13 +168,18 @@ function TradeRow({ trade, onClose }) {
 
         {/* Right — P&L */}
         <div style={{ textAlign: "right" }}>
-          {pnl != null ? (
+          {displayPnl != null ? (
             <>
-              <div style={{ fontSize: 20, fontWeight: 700, color: pnlColor(pnl) }}>{fmt(pnl)}</div>
-              <div style={{ fontSize: 11, color: pnlColor(pnl) }}>{pct(trade.pnl_pct)}</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: pnlColor(displayPnl) }}>
+                {displayPnl >= 0 ? "+" : ""}{fmt(displayPnl)}
+              </div>
+              <div style={{ fontSize: 11, color: pnlColor(displayPnl) }}>
+                {pct(displayPnlPct)}
+              </div>
+              {isOpen && <div style={{ fontSize: 9, color: "#555", marginTop: 2 }}>live</div>}
             </>
           ) : (
-            <div style={{ fontSize: 11, color: "#555" }}>Open P&L: live</div>
+            <div style={{ fontSize: 11, color: "#555" }}>{isOpen ? "fetching..." : "—"}</div>
           )}
           {isOpen && (
             <button onClick={() => onClose(trade.id)} style={{
