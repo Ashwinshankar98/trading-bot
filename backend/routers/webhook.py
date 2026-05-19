@@ -1,6 +1,8 @@
-import os, json
+import os, json, logging
 import httpx
 from fastapi import APIRouter, HTTPException, BackgroundTasks
+
+logger = logging.getLogger(__name__)
 from core.indicators import get_all_indicators
 from core.regime import detect_regime
 from core.paper_trader import get_strategy_account, get_active_strategy, open_trade, close_trade, get_open_trades
@@ -66,6 +68,14 @@ async def test_trade(body: dict = None):
 
 async def _process_signal(symbol: str, signal: str, price: float, strategy_id: str):
     """Process trade logic in the background so TradingView gets an immediate 200."""
+    logger.info("[SIGNAL] %s %s %s @ %.2f", strategy_id, signal.upper(), symbol, price)
+    try:
+     await _process_signal_inner(symbol, signal, price, strategy_id)
+    except Exception as e:
+        logger.exception("[SIGNAL] Unhandled error processing %s %s: %s", strategy_id, signal, e)
+
+
+async def _process_signal_inner(symbol: str, signal: str, price: float, strategy_id: str):
     # ── Close signal ──────────────────────────────────────────────────────────
     if signal == "close":
         open_trades   = get_open_trades(strategy_id)
@@ -93,18 +103,26 @@ async def _process_signal(symbol: str, signal: str, price: float, strategy_id: s
         return
 
     # ── Buy / Sell signal ─────────────────────────────────────────────────────
+    logger.info("[SIGNAL] Fetching indicators for %s", symbol)
     indicators = get_all_indicators(symbol)
+    logger.info("[SIGNAL] Indicators: %s", indicators)
     regime     = detect_regime(symbol)
+    logger.info("[SIGNAL] Regime: %s", regime)
     account    = get_strategy_account(strategy_id)
     strategy   = get_active_strategy()
 
     decision = decide_trade(symbol, signal, indicators, regime, account, strategy)
+    logger.info("[SIGNAL] Decision: action=%s confidence=%.2f reason=%s",
+                decision["action"], decision["confidence"], decision["reasoning"][:100])
 
     if decision["action"] != "open" or decision["confidence"] < strategy.get("entry_threshold", 0.60):
+        logger.info("[SIGNAL] Skipped — action=%s confidence=%.2f threshold=%.2f",
+                    decision["action"], decision["confidence"], strategy.get("entry_threshold", 0.60))
         return
 
     side = decision["side"] or ("long" if signal == "buy" else "short")
     trade_id, msg = open_trade(symbol, side, price, indicators, decision["reasoning"], regime, strategy_id)
+    logger.info("[SIGNAL] open_trade result: trade_id=%s msg=%s", trade_id, msg)
 
     if not trade_id:
         return
