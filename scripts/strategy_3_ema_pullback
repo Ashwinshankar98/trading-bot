@@ -80,11 +80,9 @@ bgcolor(downtrend ? color.new(color.red,   97) : na)
 // ALERTS — single alert() call per bar, script sends correct JSON
 // Create ONE TradingView alert: condition = "Any alert() function call"
 // ═══════════════════════════════════════════════════════════════
-var string BASE = '{"secret":"mysecret123","symbol":"{{ticker}}","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"ema_pullback","signal":'
-
 if buy_signal
-    alert(BASE + '"buy"}',   alert.freq_once_per_bar_close)
+    alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"ema_pullback","signal":"buy"}',   alert.freq_once_per_bar_close)
 if sell_signal
-    alert(BASE + '"sell"}',  alert.freq_once_per_bar_close)
+    alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"ema_pullback","signal":"sell"}',  alert.freq_once_per_bar_close)
 if close_signal
-    alert(BASE + '"close"}', alert.freq_once_per_bar_close)
+    alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"ema_pullback","signal":"close"}', alert.freq_once_per_bar_close)

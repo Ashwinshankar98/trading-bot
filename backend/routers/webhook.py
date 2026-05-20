@@ -1,6 +1,6 @@
 import os, json
 import httpx
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
 from core.indicators import get_all_indicators
 from core.regime import detect_regime
 from core.paper_trader import (
@@ -195,11 +195,24 @@ async def _process_signal_inner(symbol: str, signal: str, price: float, strategy
 
 
 @router.post("/tradingview")
-async def tradingview_webhook(payload: dict, background_tasks: BackgroundTasks):
+async def tradingview_webhook(
+    payload: dict,
+    background_tasks: BackgroundTasks,
+    symbol: str = Query(default=None, description="Ticker override — set in webhook URL as ?symbol=SPY"),
+):
     if payload.get("secret") != WEBHOOK_SECRET:
         raise HTTPException(status_code=403, detail="Invalid webhook secret")
 
-    symbol      = payload.get("symbol", "SPY").upper()
+    raw_symbol  = payload.get("symbol", "")
+    # Use URL query param when Pine Script placeholder wasn't substituted
+    if symbol:
+        resolved_symbol = symbol.upper()
+    elif raw_symbol and "{{" not in raw_symbol:
+        resolved_symbol = raw_symbol.upper()
+    else:
+        raise HTTPException(status_code=400, detail=f"Unresolved ticker placeholder: {raw_symbol!r}. Add ?symbol=SPY to the webhook URL.")
+
+    symbol      = resolved_symbol
     signal      = payload.get("signal", "").lower()
     price       = float(payload.get("price", 0))
     strategy_id = payload.get("strategy", "ema_cross")
