@@ -1,4 +1,4 @@
-import os, json
+import os, json, asyncio
 import httpx
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
 from core.indicators import get_all_indicators
@@ -107,7 +107,7 @@ async def _close_trades_for_strategy(symbol: str, price: float, strategy_id: str
             conn      = get_connection()
             trade_row = dict(conn.execute("SELECT * FROM trades WHERE id=?", (trade["id"],)).fetchone())
             conn.close()
-            pm = write_post_mortem(trade_row, trade.get("indicators") or {})
+            pm = await asyncio.to_thread(write_post_mortem, trade_row, trade.get("indicators") or {})
             conn = get_connection()
             conn.execute("""
                 INSERT INTO trade_journal (trade_id, what_worked, what_failed, market_notes)
@@ -131,19 +131,19 @@ async def _process_signal_inner(symbol: str, signal: str, price: float, strategy
         await _close_trades_for_strategy(symbol, price, strategy_id)
         return
 
-    # ── Buy / Sell — fetch market context ────────────────────────────────────
+    # ── Buy / Sell — fetch market context (run blocking I/O in threads) ──────
     print(f"[SIGNAL] Fetching indicators for {symbol}", flush=True)
-    indicators = get_all_indicators(symbol)
+    indicators = await asyncio.to_thread(get_all_indicators, symbol)
     print(f"[SIGNAL] Indicators: {indicators}", flush=True)
 
-    regime   = detect_regime(symbol)
+    regime   = await asyncio.to_thread(detect_regime, symbol)
     account  = get_strategy_account(strategy_id)
     strategy = get_active_strategy()
     print(f"[SIGNAL] Regime: {regime}", flush=True)
 
     # ── Fetch options candidates ──────────────────────────────────────────────
     print(f"[SIGNAL] Fetching options candidates for {symbol} signal={signal}", flush=True)
-    candidates = get_option_candidates(price, signal)
+    candidates = await asyncio.to_thread(get_option_candidates, price, signal)
     print(f"[SIGNAL] {len(candidates)} candidates found", flush=True)
 
     if not candidates:
@@ -151,7 +151,7 @@ async def _process_signal_inner(symbol: str, signal: str, price: float, strategy
         return
 
     # ── Claude decides ────────────────────────────────────────────────────────
-    decision = decide_options_trade(symbol, signal, indicators, regime, account, strategy, candidates)
+    decision = await asyncio.to_thread(decide_options_trade, symbol, signal, indicators, regime, account, strategy, candidates)
     print(f"[SIGNAL] Decision: action={decision['action']} confidence={decision['confidence']:.2f} contract={decision.get('chosen_contract')}", flush=True)
     print(f"[SIGNAL] Reasoning: {decision.get('reasoning', '')[:150]}", flush=True)
 
