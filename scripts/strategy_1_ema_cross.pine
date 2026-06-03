@@ -1,190 +1,338 @@
 //@version=5
-indicator(title="Strategy 1 - EMA Cross + FVG + Sweep", overlay=true)
+indicator("EMA Cross + FVG + Sweep  [SPY Only]",
+     overlay          = true,
+     max_boxes_count  = 50,
+     max_labels_count = 50,
+     max_lines_count  = 50)
 
-// ═══════════════════════════════════════════════════════════════
-// INPUTS
-// ═══════════════════════════════════════════════════════════════
-ema_fast_len  = input.int(9,    title="EMA Fast Length")
-ema_slow_len  = input.int(21,   title="EMA Slow Length")
-rsi_len       = input.int(14,   title="RSI Length")
-rsi_ob        = input.int(70,   title="RSI Overbought")
-rsi_os        = input.int(30,   title="RSI Oversold")
-adx_len       = input.int(14,   title="ADX Length")
-adx_threshold = input.int(20,   title="ADX Min Threshold")
-atr_len       = input.int(14,   title="ATR Length")
-atr_sl_mult   = input.float(1.5, title="ATR Stop Loss Multiplier")
-atr_tp_mult   = input.float(3.0, title="ATR Take Profit Multiplier")
-rvol_min      = input.float(1.5, title="Min Relative Volume (RVOL)")
-swing_len     = input.int(5,    title="Swing Pivot Lookback (Sweep)")
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  INPUTS                                                      ║
+// ╚══════════════════════════════════════════════════════════════╝
+var string G1 = "EMA Settings"
+fast_len  = input.int(9,    "Fast EMA",        group=G1)
+slow_len  = input.int(21,   "Slow EMA",        group=G1)
 
-// ═══════════════════════════════════════════════════════════════
-// CORE INDICATORS
-// ═══════════════════════════════════════════════════════════════
-ema_fast = ta.ema(close, ema_fast_len)
-ema_slow = ta.ema(close, ema_slow_len)
+var string G2 = "Filters"
+adx_min   = input.int(20,   "ADX Minimum",     group=G2)
+rvol_min  = input.float(1.5,"Min RVOL",        group=G2)
+swing_len = input.int(5,    "Sweep Lookback",  group=G2)
+rsi_ob    = input.int(70,   "RSI Overbought",  group=G2)
+rsi_os    = input.int(30,   "RSI Oversold",    group=G2)
+
+var string G3 = "Risk"
+atr_sl    = input.float(1.5,"ATR SL Multiplier", group=G3)
+atr_tp    = input.float(3.0,"ATR TP Multiplier", group=G3)
+
+var string G4 = "Visuals"
+show_fvg  = input.bool(true, "Show FVG Zones",  group=G4)
+show_tbl  = input.bool(true, "Show Status Table",group=G4)
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  SPY GUARD  — alerts only valid on SPY                       ║
+// ╚══════════════════════════════════════════════════════════════╝
+is_spy = syminfo.ticker == "SPY"
+if barstate.islast and not is_spy
+    label.new(bar_index, high,
+        "⚠️  This strategy is designed for SPY only.\nCurrent chart: " + syminfo.ticker,
+        style    = label.style_label_down,
+        color    = color.new(color.red, 10),
+        textcolor= color.white,
+        size     = size.normal)
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  CORE INDICATORS                                             ║
+// ╚══════════════════════════════════════════════════════════════╝
+ema_fast = ta.ema(close, fast_len)
+ema_slow = ta.ema(close, slow_len)
 ema_200  = ta.ema(close, 200)
 vwap_val = ta.vwap(hlc3)
-rsi_val  = ta.rsi(close, rsi_len)
-atr_val  = ta.atr(atr_len)
-
-[diplus, diminus, adx_val] = ta.dmi(adx_len, adx_len)
-
+rsi_val  = ta.rsi(close, 14)
+atr_val  = ta.atr(14)
+[diplus, diminus, adx_val] = ta.dmi(14, 14)
 macd_line = ta.ema(close, 12) - ta.ema(close, 26)
 macd_sig  = ta.ema(macd_line, 9)
 macd_hist = macd_line - macd_sig
 
-// ═══════════════════════════════════════════════════════════════
-// RELATIVE VOLUME (RVOL)
-// Compares current bar volume to 20-bar average — smarter than raw volume spike
-// ═══════════════════════════════════════════════════════════════
-vol_avg  = ta.sma(volume, 20)
-rvol     = volume / vol_avg
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  RELATIVE VOLUME (RVOL)                                      ║
+// ╚══════════════════════════════════════════════════════════════╝
+vol_avg   = ta.sma(volume, 20)
+rvol      = volume / vol_avg
 high_rvol = rvol >= rvol_min
 
-// ═══════════════════════════════════════════════════════════════
-// FAIR VALUE GAP (FVG) — ICT / SMC concept
-// Bullish FVG: current bar's low > 2-bars-ago high  → unmitigated gap below = support
-// Bearish FVG: current bar's high < 2-bars-ago low  → unmitigated gap above = resistance
-// ═══════════════════════════════════════════════════════════════
-fvg_bull_formed = low > high[2]
-fvg_bear_formed = high < low[2]
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  FAIR VALUE GAPS (FVG)                                       ║
+// ║  Bullish: candle low > 2-bars-ago high  → unmitigated gap   ║
+// ║  Bearish: candle high < 2-bars-ago low  → unmitigated gap   ║
+// ╚══════════════════════════════════════════════════════════════╝
+fvg_bull = low > high[2]
+fvg_bear = high < low[2]
 
-// Zone boundaries of the most recent FVG
-bull_fvg_bottom = ta.valuewhen(fvg_bull_formed, high[2], 0)
-bull_fvg_top    = ta.valuewhen(fvg_bull_formed, low,     0)
-bear_fvg_bottom = ta.valuewhen(fvg_bear_formed, high,    0)
-bear_fvg_top    = ta.valuewhen(fvg_bear_formed, low[2],  0)
+bull_fvg_bot = ta.valuewhen(fvg_bull, high[2], 0)
+bull_fvg_top = ta.valuewhen(fvg_bull, low,     0)
+bear_fvg_bot = ta.valuewhen(fvg_bear, high,    0)
+bear_fvg_top = ta.valuewhen(fvg_bear, low[2],  0)
 
-// Recent FVG formed in last 15 bars
-recent_bull_fvg = ta.barssince(fvg_bull_formed) <= 15
-recent_bear_fvg = ta.barssince(fvg_bear_formed) <= 15
+recent_bull_fvg   = ta.barssince(fvg_bull) <= 15
+recent_bear_fvg   = ta.barssince(fvg_bear) <= 15
+price_in_bull_fvg = not na(bull_fvg_bot) and close >= bull_fvg_bot and close <= bull_fvg_top
+price_in_bear_fvg = not na(bear_fvg_bot) and close >= bear_fvg_bot and close <= bear_fvg_top
 
-// Price pulled back INTO a bullish FVG (premium entry on longs)
-price_in_bull_fvg = not na(bull_fvg_bottom) and close >= bull_fvg_bottom and close <= bull_fvg_top
-price_in_bear_fvg = not na(bear_fvg_bottom) and close >= bear_fvg_bottom and close <= bear_fvg_top
+// Draw FVG zones as shaded boxes (last 5 per direction)
+var box[] bull_boxes = array.new<box>()
+var box[] bear_boxes = array.new<box>()
 
-// ═══════════════════════════════════════════════════════════════
-// LIQUIDITY SWEEP — ICT / SMC concept
-// Smart money hunts stops beyond swing highs/lows before reversing
-// Bullish sweep: wick below a swing low, closed above it → expect upside
-// Bearish sweep: wick above a swing high, closed below it → expect downside
-// ═══════════════════════════════════════════════════════════════
-swing_high = ta.pivothigh(high, swing_len, 1)
-swing_low  = ta.pivotlow(low,  swing_len, 1)
+if show_fvg and fvg_bull
+    b = box.new(bar_index - 2, low, bar_index + 40, high[2],
+        bgcolor      = color.new(color.green, 82),
+        border_color = color.new(color.green, 55),
+        border_width = 1,
+        text         = "Bullish FVG",
+        text_color   = color.new(color.green, 20),
+        text_size    = size.tiny,
+        text_halign  = text.align_left,
+        text_valign  = text.align_top)
+    array.unshift(bull_boxes, b)
+    if array.size(bull_boxes) > 5
+        box.delete(array.pop(bull_boxes))
 
-last_swing_high = ta.valuewhen(not na(swing_high), swing_high, 0)
-last_swing_low  = ta.valuewhen(not na(swing_low),  swing_low,  0)
+if show_fvg and fvg_bear
+    b = box.new(bar_index - 2, low[2], bar_index + 40, high,
+        bgcolor      = color.new(color.red, 82),
+        border_color = color.new(color.red, 55),
+        border_width = 1,
+        text         = "Bearish FVG",
+        text_color   = color.new(color.red, 20),
+        text_size    = size.tiny,
+        text_halign  = text.align_left,
+        text_valign  = text.align_top)
+    array.unshift(bear_boxes, b)
+    if array.size(bear_boxes) > 5
+        box.delete(array.pop(bear_boxes))
 
-bull_sweep = not na(last_swing_low)  and low < last_swing_low  and close > last_swing_low
-bear_sweep = not na(last_swing_high) and high > last_swing_high and close < last_swing_high
+// Extend boxes to current bar so they stay visible
+if show_fvg and array.size(bull_boxes) > 0
+    for i = 0 to math.min(array.size(bull_boxes) - 1, 4)
+        b = array.get(bull_boxes, i)
+        box.set_right(b, bar_index + 20)
+        // Fade box if price has entered it (partially mitigated)
+        if close >= box.get_bottom(b) and close <= box.get_top(b)
+            box.set_bgcolor(b, color.new(color.green, 65))
 
-// Recent sweep in last 5 bars
-recent_bull_sweep = ta.barssince(bull_sweep) <= 5
-recent_bear_sweep = ta.barssince(bear_sweep) <= 5
+if show_fvg and array.size(bear_boxes) > 0
+    for i = 0 to math.min(array.size(bear_boxes) - 1, 4)
+        b = array.get(bear_boxes, i)
+        box.set_right(b, bar_index + 20)
+        if close >= box.get_bottom(b) and close <= box.get_top(b)
+            box.set_bgcolor(b, color.new(color.red, 65))
 
-// ═══════════════════════════════════════════════════════════════
-// REGIME
-// ═══════════════════════════════════════════════════════════════
-is_trending = adx_val > adx_threshold
-bull_trend  = is_trending and close > ema_200
-bear_trend  = is_trending and close < ema_200
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  LIQUIDITY SWEEP                                             ║
+// ║  Price wick beyond swing high/low, closed back = stop hunt  ║
+// ╚══════════════════════════════════════════════════════════════╝
+ph = ta.pivothigh(high, swing_len, 1)
+pl = ta.pivotlow(low,  swing_len, 1)
 
-// ═══════════════════════════════════════════════════════════════
-// MARKET HOURS
-// ═══════════════════════════════════════════════════════════════
-in_hours = not na(time("5", "0930-1545:23456"))
-eod_time = not na(time("5", "1545-1600:23456"))
+last_ph = ta.valuewhen(not na(ph), ph, 0)
+last_pl = ta.valuewhen(not na(pl), pl, 0)
 
-// ═══════════════════════════════════════════════════════════════
-// ENTRY SIGNALS
-// EMA cross + all original filters + RVOL + (FVG OR sweep confluence)
-// ═══════════════════════════════════════════════════════════════
-ema_bull_cross = ta.crossover(ema_fast, ema_slow)
-above_vwap     = close > vwap_val
-rsi_bull       = rsi_val > 50 and rsi_val < rsi_ob
-macd_bull      = macd_hist > 0 and macd_hist > macd_hist[1]
-trend_ok_bull  = is_trending ? diplus > diminus : rsi_val > 50
+bull_sweep    = not na(last_pl) and low < last_pl and close > last_pl
+bear_sweep    = not na(last_ph) and high > last_ph and close < last_ph
+recent_bull_s = ta.barssince(bull_sweep) <= 5
+recent_bear_s = ta.barssince(bear_sweep) <= 5
 
-// SMC confluence: at least one of FVG or sweep must confirm the direction
-smc_bull = recent_bull_fvg or recent_bull_sweep or price_in_bull_fvg
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  REGIME                                                      ║
+// ╚══════════════════════════════════════════════════════════════╝
+is_trending = adx_val > adx_min
+bull_regime = is_trending and close > ema_200
+bear_regime = is_trending and close < ema_200
+in_hours    = not na(time("5", "0930-1545:23456"))
+eod_time    = not na(time("5", "1545-1600:23456"))
 
-buy_signal = in_hours and ema_bull_cross and above_vwap and rsi_bull and macd_bull and trend_ok_bull and high_rvol and smc_bull
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  ENTRY SIGNALS                                               ║
+// ╚══════════════════════════════════════════════════════════════╝
+ema_cross_up   = ta.crossover(ema_fast, ema_slow)
+ema_cross_down = ta.crossunder(ema_fast, ema_slow)
 
-ema_bear_cross = ta.crossunder(ema_fast, ema_slow)
-below_vwap     = close < vwap_val
-rsi_bear       = rsi_val < 50 and rsi_val > rsi_os
-macd_bear      = macd_hist < 0 and macd_hist < macd_hist[1]
-trend_ok_bear  = is_trending ? diminus > diplus : rsi_val < 50
+above_vwap = close > vwap_val
+below_vwap = close < vwap_val
+rsi_bull   = rsi_val > 50 and rsi_val < rsi_ob
+rsi_bear   = rsi_val < 50 and rsi_val > rsi_os
+macd_bull  = macd_hist > 0 and macd_hist > macd_hist[1]
+macd_bear  = macd_hist < 0 and macd_hist < macd_hist[1]
+trend_bull = is_trending ? diplus > diminus : rsi_val > 50
+trend_bear = is_trending ? diminus > diplus : rsi_val < 50
 
-smc_bear = recent_bear_fvg or recent_bear_sweep or price_in_bear_fvg
+smc_bull = recent_bull_fvg or recent_bull_s or price_in_bull_fvg
+smc_bear = recent_bear_fvg or recent_bear_s or price_in_bear_fvg
 
-sell_signal = in_hours and ema_bear_cross and below_vwap and rsi_bear and macd_bear and trend_ok_bear and high_rvol and smc_bear
+buy_signal  = in_hours and is_spy and ema_cross_up   and above_vwap and rsi_bull and macd_bull and trend_bull and high_rvol and smc_bull
+sell_signal = in_hours and is_spy and ema_cross_down and below_vwap and rsi_bear and macd_bear and trend_bear and high_rvol and smc_bear
 
-// ═══════════════════════════════════════════════════════════════
-// POSITION TRACKING & SL/TP
-// ═══════════════════════════════════════════════════════════════
-var float entry_price = na
-var int   position    = 0
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  POSITION TRACKING & SL / TP                                 ║
+// ╚══════════════════════════════════════════════════════════════╝
+var float entry_px = na
+var int   position = 0
 
 if buy_signal and position == 0
-    entry_price := close
-    position    := 1
-
+    entry_px := close
+    position := 1
 if sell_signal and position == 0
-    entry_price := close
-    position    := -1
+    entry_px := close
+    position := -1
 
-sl_price = position == 1  ? entry_price - atr_val * atr_sl_mult :
-           position == -1 ? entry_price + atr_val * atr_sl_mult : na
-tp_price = position == 1  ? entry_price + atr_val * atr_tp_mult :
-           position == -1 ? entry_price - atr_val * atr_tp_mult : na
+sl = position ==  1 ? entry_px - atr_val * atr_sl :
+     position == -1 ? entry_px + atr_val * atr_sl : na
+tp = position ==  1 ? entry_px + atr_val * atr_tp :
+     position == -1 ? entry_px - atr_val * atr_tp : na
 
-hit_sl = (position == 1  and low  <= sl_price) or (position == -1 and high >= sl_price)
-hit_tp = (position == 1  and high >= tp_price) or (position == -1 and low  <= tp_price)
-
+hit_sl = (position ==  1 and low  <= sl) or (position == -1 and high >= sl)
+hit_tp = (position ==  1 and high >= tp) or (position == -1 and low  <= tp)
 close_signal = position != 0 and (hit_sl or hit_tp or eod_time)
 
 if close_signal
-    position    := 0
-    entry_price := na
+    position := 0
+    entry_px := na
 
-// ═══════════════════════════════════════════════════════════════
-// PLOTS
-// ═══════════════════════════════════════════════════════════════
-plot(ema_fast, title="EMA 9",   color=color.blue,   linewidth=1)
-plot(ema_slow, title="EMA 21",  color=color.orange, linewidth=2)
-plot(ema_200,  title="EMA 200", color=color.gray,   linewidth=1)
-plot(vwap_val, title="VWAP",    color=color.purple, linewidth=2)
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  PLOTS                                                       ║
+// ╚══════════════════════════════════════════════════════════════╝
+plot(ema_fast, "EMA 9",   color=color.new(color.blue,   0), linewidth=1)
+plot(ema_slow, "EMA 21",  color=color.new(color.orange, 0), linewidth=2)
+plot(ema_200,  "EMA 200", color=color.new(color.gray,  30), linewidth=1)
+plot(vwap_val, "VWAP",    color=color.new(color.purple, 0), linewidth=2)
+plot(sl, "SL", color=color.new(color.red,   0), linewidth=1, style=plot.style_linebr)
+plot(tp, "TP", color=color.new(color.green, 0), linewidth=1, style=plot.style_linebr)
 
-// FVG zones
-var line bull_fvg_line = na
-var line bear_fvg_line = na
-plot(bull_fvg_bottom, title="Bull FVG Bottom", color=color.new(color.green, 70), linewidth=1, style=plot.style_linebr)
-plot(bull_fvg_top,    title="Bull FVG Top",    color=color.new(color.green, 70), linewidth=1, style=plot.style_linebr)
-plot(bear_fvg_bottom, title="Bear FVG Bottom", color=color.new(color.red, 70),   linewidth=1, style=plot.style_linebr)
-plot(bear_fvg_top,    title="Bear FVG Top",    color=color.new(color.red, 70),   linewidth=1, style=plot.style_linebr)
-
-plot(sl_price, title="SL", color=color.red,   linewidth=1, style=plot.style_linebr)
-plot(tp_price, title="TP", color=color.green, linewidth=1, style=plot.style_linebr)
-
-plotshape(buy_signal,   style=shape.labelup,   location=location.belowbar, color=color.green, text="BUY",  textcolor=color.white, size=size.normal)
-plotshape(sell_signal,  style=shape.labeldown, location=location.abovebar, color=color.red,   text="SELL", textcolor=color.white, size=size.normal)
-plotshape(close_signal, style=shape.xcross,    location=location.abovebar, color=color.white, text="EXIT", textcolor=color.white, size=size.small)
+bgcolor(bull_regime ? color.new(color.green, 96) : na, title="Bull Regime")
+bgcolor(bear_regime ? color.new(color.red,   96) : na, title="Bear Regime")
 
 // Sweep markers
-plotshape(bull_sweep, title="Bull Sweep", style=shape.triangleup,   location=location.belowbar, color=color.new(color.aqua, 30),   size=size.small, text="SWEEP↑")
-plotshape(bear_sweep, title="Bear Sweep", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 30), size=size.small, text="SWEEP↓")
+plotshape(bull_sweep, "Bull Sweep", shape.triangleup,   location.belowbar,
+    color.new(color.aqua,   10), size=size.small, text="SWEEP↑", textcolor=color.aqua)
+plotshape(bear_sweep, "Bear Sweep", shape.triangledown, location.abovebar,
+    color.new(color.orange, 10), size=size.small, text="SWEEP↓", textcolor=color.orange)
 
-bgcolor(bull_trend ? color.new(color.green, 95) : na)
-bgcolor(bear_trend ? color.new(color.red,   95) : na)
-
-// ═══════════════════════════════════════════════════════════════
-// ALERTS
-// Create ONE alert per strategy: condition = "Any alert() function call"
-// ═══════════════════════════════════════════════════════════════
+// Signal labels — show what confluence triggered the entry
 if buy_signal
-    alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"ema_cross","signal":"buy"}',   alert.freq_once_per_bar_close)
+    detail = "▲ BUY\n"
+    detail += smc_bull and recent_bull_fvg ? "📦 FVG " : ""
+    detail += smc_bull and recent_bull_s   ? "💧 SWEEP " : ""
+    detail += "RVOL " + str.tostring(rvol, "#.#") + "x"
+    label.new(bar_index, low,  detail,
+        style=label.style_label_up, yloc=yloc.belowbar,
+        color=color.new(color.green, 5), textcolor=color.white, size=size.normal)
+
 if sell_signal
-    alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"ema_cross","signal":"sell"}',  alert.freq_once_per_bar_close)
+    detail = "▼ SELL\n"
+    detail += smc_bear and recent_bear_fvg ? "📦 FVG " : ""
+    detail += smc_bear and recent_bear_s   ? "💧 SWEEP " : ""
+    detail += "RVOL " + str.tostring(rvol, "#.#") + "x"
+    label.new(bar_index, high, detail,
+        style=label.style_label_down, yloc=yloc.abovebar,
+        color=color.new(color.red, 5), textcolor=color.white, size=size.normal)
+
 if close_signal
-    alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"ema_cross","signal":"close"}', alert.freq_once_per_bar_close)
+    reason = hit_sl ? "SL HIT" : hit_tp ? "TP HIT" : "EOD"
+    label.new(bar_index, close, "✖ EXIT\n" + reason,
+        style=label.style_label_down, color=color.new(color.gray, 20), textcolor=color.white, size=size.small)
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  STATUS TABLE  (top-right, real-time factor dashboard)       ║
+// ╚══════════════════════════════════════════════════════════════╝
+if show_tbl
+    var table tbl = table.new(position.top_right, 2, 14,
+        bgcolor      = color.new(color.black, 5),
+        frame_color  = color.new(color.gray,  50),
+        frame_width  = 1,
+        border_color = color.new(color.gray,  70),
+        border_width = 1)
+
+    C_HDR  = color.new(#1a1a2e, 0)
+    C_PASS = color.new(color.teal,  20)
+    C_FAIL = color.new(color.maroon,20)
+    C_NEUT = color.new(color.gray,  40)
+    C_TXT  = color.white
+    SZ     = size.small
+
+    // Header row
+    table.cell(tbl, 0, 0, "FACTOR",        bgcolor=C_HDR,  text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 0, "VALUE",         bgcolor=C_HDR,  text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // Ticker guard
+    table.cell(tbl, 0, 1, "Ticker",        bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 1, syminfo.ticker,  bgcolor=is_spy ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // RVOL
+    table.cell(tbl, 0, 2, "RVOL",          bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 2, str.tostring(rvol,"#.##") + "x", bgcolor=high_rvol ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // RSI
+    table.cell(tbl, 0, 3, "RSI (14)",      bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    rsi_ok = rsi_val > 40 and rsi_val < 70
+    table.cell(tbl, 1, 3, str.tostring(rsi_val,"#.0"), bgcolor=rsi_ok ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // MACD
+    table.cell(tbl, 0, 4, "MACD Hist",     bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 4, macd_hist > 0 ? "Bullish" : "Bearish", bgcolor=macd_hist > 0 ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // EMA alignment
+    table.cell(tbl, 0, 5, "EMA 9 vs 21",   bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    ema_up = ema_fast > ema_slow
+    table.cell(tbl, 1, 5, ema_up ? "Fast > Slow" : "Fast < Slow", bgcolor=ema_up ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // VWAP
+    table.cell(tbl, 0, 6, "vs VWAP",       bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 6, close > vwap_val ? "Above" : "Below", bgcolor=close > vwap_val ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // ADX
+    table.cell(tbl, 0, 7, "ADX",           bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 7, str.tostring(adx_val,"#.0"), bgcolor=adx_val > adx_min ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // Bullish FVG
+    bs_bull_fvg = ta.barssince(fvg_bull)
+    table.cell(tbl, 0, 8, "Bull FVG",      bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 8, recent_bull_fvg ? str.tostring(bs_bull_fvg) + " bars ago" : "None",
+        bgcolor = recent_bull_fvg ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // Bearish FVG
+    bs_bear_fvg = ta.barssince(fvg_bear)
+    table.cell(tbl, 0, 9, "Bear FVG",      bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 9, recent_bear_fvg ? str.tostring(bs_bear_fvg) + " bars ago" : "None",
+        bgcolor = recent_bear_fvg ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // Sweep
+    table.cell(tbl, 0, 10, "Liq Sweep",    bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    any_sweep = recent_bull_s or recent_bear_s
+    sweep_txt = recent_bull_s ? "Bull " : "" + recent_bear_s ? "Bear" : ""
+    table.cell(tbl, 1, 10, any_sweep ? sweep_txt + " ✓" : "None",
+        bgcolor=any_sweep ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // Divider
+    table.cell(tbl, 0, 11, "──────────────", bgcolor=C_HDR, text_color=color.new(color.gray,30), text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 11, "──────────",     bgcolor=C_HDR, text_color=color.new(color.gray,30), text_size=SZ, text_halign=text.align_center)
+
+    // Overall signal
+    sig_txt = buy_signal ? "▲ BUY" : sell_signal ? "▼ SELL" : "WAITING"
+    sig_col = buy_signal ? C_PASS  : sell_signal ? C_FAIL  : C_NEUT
+    table.cell(tbl, 0, 12, "SIGNAL",        bgcolor=C_HDR, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 12, sig_txt,         bgcolor=sig_col, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // Regime
+    regime_txt = bull_regime ? "BULL TREND" : bear_regime ? "BEAR TREND" : "RANGING"
+    regime_col = bull_regime ? C_PASS       : bear_regime ? C_FAIL       : C_NEUT
+    table.cell(tbl, 0, 13, "Regime",        bgcolor=C_HDR, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 13, regime_txt,      bgcolor=regime_col, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  ALERTS  — condition: "Any alert() function call"            ║
+// ╚══════════════════════════════════════════════════════════════╝
+if buy_signal
+    alert('{"secret":"mysecret123","symbol":"SPY","price":' + str.tostring(close,'#.00') + ',"timeframe":"5m","strategy":"ema_cross","signal":"buy"}',   alert.freq_once_per_bar_close)
+if sell_signal
+    alert('{"secret":"mysecret123","symbol":"SPY","price":' + str.tostring(close,'#.00') + ',"timeframe":"5m","strategy":"ema_cross","signal":"sell"}',  alert.freq_once_per_bar_close)
+if close_signal
+    alert('{"secret":"mysecret123","symbol":"SPY","price":' + str.tostring(close,'#.00') + ',"timeframe":"5m","strategy":"ema_cross","signal":"close"}', alert.freq_once_per_bar_close)

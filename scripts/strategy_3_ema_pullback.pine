@@ -1,158 +1,350 @@
 //@version=5
-indicator(title="Strategy 3 - EMA 21 Pullback + FVG + Sweep", overlay=true)
+indicator("EMA 21 Pullback + FVG + Sweep  [SPY Only]",
+     overlay          = true,
+     max_boxes_count  = 50,
+     max_labels_count = 50,
+     max_lines_count  = 50)
 
-// ═══════════════════════════════════════════════════════════════
-// INPUTS
-// ═══════════════════════════════════════════════════════════════
-rvol_min  = input.float(1.5, title="Min Relative Volume (RVOL)")
-swing_len = input.int(5,     title="Swing Pivot Lookback (Sweep)")
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  INPUTS                                                      ║
+// ╚══════════════════════════════════════════════════════════════╝
+var string G1 = "EMA Settings"
+ema21_len = input.int(21, "EMA 21 Length", group=G1)
+ema50_len = input.int(50, "EMA 50 Length", group=G1)
 
-// ═══════════════════════════════════════════════════════════════
-// INDICATORS
-// ═══════════════════════════════════════════════════════════════
-ema21   = ta.ema(close, 21)
-ema50   = ta.ema(close, 50)
-rsi_val = ta.rsi(close, 14)
-atr_val = ta.atr(14)
+var string G2 = "Filters"
+rvol_min  = input.float(1.5, "Min RVOL",       group=G2)
+swing_len = input.int(5,     "Sweep Lookback", group=G2)
+rsi_min   = input.int(40,    "RSI Min (long)",  group=G2)
+rsi_max   = input.int(65,    "RSI Max (long)",  group=G2)
 
-// ═══════════════════════════════════════════════════════════════
-// MARKET HOURS
-// ═══════════════════════════════════════════════════════════════
+var string G3 = "Visuals"
+show_fvg  = input.bool(true, "Show FVG Zones",   group=G3)
+show_tbl  = input.bool(true, "Show Status Table", group=G3)
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  SPY GUARD  — alerts only valid on SPY                       ║
+// ╚══════════════════════════════════════════════════════════════╝
+is_spy = syminfo.ticker == "SPY"
+if barstate.islast and not is_spy
+    label.new(bar_index, high,
+        "⚠️  This strategy is designed for SPY only.\nCurrent chart: " + syminfo.ticker,
+        style    = label.style_label_down,
+        color    = color.new(color.red, 10),
+        textcolor= color.white,
+        size     = size.normal)
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  CORE INDICATORS                                             ║
+// ╚══════════════════════════════════════════════════════════════╝
+ema21    = ta.ema(close, ema21_len)
+ema50    = ta.ema(close, ema50_len)
+ema_200  = ta.ema(close, 200)
+vwap_val = ta.vwap(hlc3)
+rsi_val  = ta.rsi(close, 14)
+atr_val  = ta.atr(14)
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  TIME WINDOWS                                                ║
+// ╚══════════════════════════════════════════════════════════════╝
 in_hours = not na(time("5", "0930-1545:23456"))
 eod_time = not na(time("5", "1545-1600:23456"))
 
-// ═══════════════════════════════════════════════════════════════
-// TREND
-// ═══════════════════════════════════════════════════════════════
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  TREND  (EMA 50 defines the macro direction)                 ║
+// ╚══════════════════════════════════════════════════════════════╝
 uptrend   = close > ema50
 downtrend = close < ema50
 
-// ═══════════════════════════════════════════════════════════════
-// RELATIVE VOLUME (RVOL)
-// ═══════════════════════════════════════════════════════════════
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  RELATIVE VOLUME (RVOL)                                      ║
+// ╚══════════════════════════════════════════════════════════════╝
 vol_avg   = ta.sma(volume, 20)
 rvol      = volume / vol_avg
 high_rvol = rvol >= rvol_min
 
-// ═══════════════════════════════════════════════════════════════
-// FAIR VALUE GAP (FVG)
-// Key insight for EMA Pullback: the strongest pullback entries happen when
-// price pulls back to EMA21 AND that level coincides with a bullish FVG.
-// Double confluence = institutional support at that exact price.
-// ═══════════════════════════════════════════════════════════════
-fvg_bull_formed = low > high[2]
-fvg_bear_formed = high < low[2]
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  FAIR VALUE GAPS (FVG)                                       ║
+// ║  Key insight: the strongest pullbacks to EMA21 happen when   ║
+// ║  that level coincides with a bullish FVG — double confluence ║
+// ║  signals institutional support at that exact price zone.     ║
+// ╚══════════════════════════════════════════════════════════════╝
+fvg_bull = low > high[2]
+fvg_bear = high < low[2]
 
-bull_fvg_bottom = ta.valuewhen(fvg_bull_formed, high[2], 0)
-bull_fvg_top    = ta.valuewhen(fvg_bull_formed, low,     0)
-bear_fvg_bottom = ta.valuewhen(fvg_bear_formed, high,    0)
-bear_fvg_top    = ta.valuewhen(fvg_bear_formed, low[2],  0)
+bull_fvg_bot = ta.valuewhen(fvg_bull, high[2], 0)
+bull_fvg_top = ta.valuewhen(fvg_bull, low,     0)
+bear_fvg_bot = ta.valuewhen(fvg_bear, high,    0)
+bear_fvg_top = ta.valuewhen(fvg_bear, low[2],  0)
 
-// Price is currently within a bullish/bearish FVG zone
-price_in_bull_fvg = not na(bull_fvg_bottom) and close >= bull_fvg_bottom and close <= bull_fvg_top
-price_in_bear_fvg = not na(bear_fvg_bottom) and close >= bear_fvg_bottom and close <= bear_fvg_top
+recent_bull_fvg   = ta.barssince(fvg_bull) <= 15
+recent_bear_fvg   = ta.barssince(fvg_bear) <= 15
+price_in_bull_fvg = not na(bull_fvg_bot) and close >= bull_fvg_bot and close <= bull_fvg_top
+price_in_bear_fvg = not na(bear_fvg_bot) and close >= bear_fvg_bot and close <= bear_fvg_top
 
-recent_bull_fvg = ta.barssince(fvg_bull_formed) <= 15
-recent_bear_fvg = ta.barssince(fvg_bear_formed) <= 15
+// Draw FVG zones as shaded boxes (last 5 per direction)
+var box[] bull_boxes = array.new<box>()
+var box[] bear_boxes = array.new<box>()
 
-// ═══════════════════════════════════════════════════════════════
-// LIQUIDITY SWEEP
-// Key insight for EMA Pullback: the cleanest bounce off EMA21 happens AFTER
-// a liquidity sweep below the EMA (stop hunt). Smart money hunts stops below
-// the moving average, then price snaps back — that snap IS the long entry.
-// ═══════════════════════════════════════════════════════════════
-swing_high = ta.pivothigh(high, swing_len, 1)
-swing_low  = ta.pivotlow(low,  swing_len, 1)
+if show_fvg and fvg_bull
+    b = box.new(bar_index - 2, low, bar_index + 40, high[2],
+        bgcolor      = color.new(color.green, 82),
+        border_color = color.new(color.green, 55),
+        border_width = 1,
+        text         = "Bullish FVG",
+        text_color   = color.new(color.green, 20),
+        text_size    = size.tiny,
+        text_halign  = text.align_left,
+        text_valign  = text.align_top)
+    array.unshift(bull_boxes, b)
+    if array.size(bull_boxes) > 5
+        box.delete(array.pop(bull_boxes))
 
-last_swing_high = ta.valuewhen(not na(swing_high), swing_high, 0)
-last_swing_low  = ta.valuewhen(not na(swing_low),  swing_low,  0)
+if show_fvg and fvg_bear
+    b = box.new(bar_index - 2, low[2], bar_index + 40, high,
+        bgcolor      = color.new(color.red, 82),
+        border_color = color.new(color.red, 55),
+        border_width = 1,
+        text         = "Bearish FVG",
+        text_color   = color.new(color.red, 20),
+        text_size    = size.tiny,
+        text_halign  = text.align_left,
+        text_valign  = text.align_top)
+    array.unshift(bear_boxes, b)
+    if array.size(bear_boxes) > 5
+        box.delete(array.pop(bear_boxes))
 
-bull_sweep = not na(last_swing_low)  and low < last_swing_low  and close > last_swing_low
-bear_sweep = not na(last_swing_high) and high > last_swing_high and close < last_swing_high
+// Extend boxes to current bar
+if show_fvg and array.size(bull_boxes) > 0
+    for i = 0 to math.min(array.size(bull_boxes) - 1, 4)
+        b = array.get(bull_boxes, i)
+        box.set_right(b, bar_index + 20)
+        if close >= box.get_bottom(b) and close <= box.get_top(b)
+            box.set_bgcolor(b, color.new(color.green, 65))
 
-// Recent sweep: last 5 bars (the stop hunt just happened, entry follows)
-recent_bull_sweep = ta.barssince(bull_sweep) <= 5
-recent_bear_sweep = ta.barssince(bear_sweep) <= 5
+if show_fvg and array.size(bear_boxes) > 0
+    for i = 0 to math.min(array.size(bear_boxes) - 1, 4)
+        b = array.get(bear_boxes, i)
+        box.set_right(b, bar_index + 20)
+        if close >= box.get_bottom(b) and close <= box.get_top(b)
+            box.set_bgcolor(b, color.new(color.red, 65))
 
-// ═══════════════════════════════════════════════════════════════
-// ENTRY SIGNALS
-// Original: bounce off EMA21 in trend direction with RSI filter
-// NEW: require SMC confluence — either price is IN a FVG or a sweep just happened
-// This makes entries rare but eliminates the random EMA touches that failed
-// ═══════════════════════════════════════════════════════════════
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  LIQUIDITY SWEEP                                             ║
+// ║  Key insight: the cleanest EMA21 bounce happens AFTER a      ║
+// ║  sweep below the EMA (stop hunt). Smart money hunts stops    ║
+// ║  below the moving average, price snaps back — that snap IS   ║
+// ║  the entry. Sweep + FVG confluence = highest-quality setup.  ║
+// ╚══════════════════════════════════════════════════════════════╝
+ph = ta.pivothigh(high, swing_len, 1)
+pl = ta.pivotlow(low,  swing_len, 1)
+
+last_ph = ta.valuewhen(not na(ph), ph, 0)
+last_pl = ta.valuewhen(not na(pl), pl, 0)
+
+bull_sweep    = not na(last_pl) and low < last_pl and close > last_pl
+bear_sweep    = not na(last_ph) and high > last_ph and close < last_ph
+recent_bull_s = ta.barssince(bull_sweep) <= 5
+recent_bear_s = ta.barssince(bear_sweep) <= 5
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  PULLBACK DETECTION                                          ║
+// ║  Bounce: price crossed above EMA21 from a recent touch       ║
+// ║  Rejection: price crossed below EMA21 from a recent touch    ║
+// ╚══════════════════════════════════════════════════════════════╝
+// Price was at or below EMA21 (touching) then bounced back above
 bounced_above  = close > ema21 and close[1] <= ema21 * 1.002
 rejected_below = close < ema21 and close[1] >= ema21 * 0.998
 
-rsi_bull_pb = rsi_val > 40 and rsi_val < 65
-rsi_bear_pb = rsi_val < 60 and rsi_val > 35
+// RSI must show momentum but not be overbought/oversold
+rsi_bull_pb = rsi_val >= rsi_min and rsi_val <= rsi_max
+rsi_bear_pb = rsi_val <= (100 - rsi_min) and rsi_val >= (100 - rsi_max)
+
+// EMA21 must be trending in the signal direction (rising for long, falling for short)
+ema21_rising  = ta.rising(ema21,  3)
+ema21_falling = ta.falling(ema21, 3)
 
 // SMC confluence: FVG or sweep must confirm the bounce
-smc_bull = price_in_bull_fvg or recent_bull_fvg or recent_bull_sweep
-smc_bear = price_in_bear_fvg or recent_bear_fvg or recent_bear_sweep
+smc_bull = price_in_bull_fvg or recent_bull_fvg or recent_bull_s
+smc_bear = price_in_bear_fvg or recent_bear_fvg or recent_bear_s
 
-buy_signal  = in_hours and uptrend   and bounced_above  and rsi_bull_pb and ta.rising(ema21,  3) and high_rvol and smc_bull
-sell_signal = in_hours and downtrend and rejected_below and rsi_bear_pb and ta.falling(ema21, 3) and high_rvol and smc_bear
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  ENTRY SIGNALS                                               ║
+// ╚══════════════════════════════════════════════════════════════╝
+buy_signal  = in_hours and is_spy and uptrend   and bounced_above  and rsi_bull_pb and ema21_rising  and high_rvol and smc_bull
+sell_signal = in_hours and is_spy and downtrend and rejected_below and rsi_bear_pb and ema21_falling and high_rvol and smc_bear
 
-// ═══════════════════════════════════════════════════════════════
-// POSITION TRACKING & SL/TP
-// SL = 1× ATR beyond EMA21, TP = 2× risk
-// ═══════════════════════════════════════════════════════════════
-var float entry_price = na
-var int   position    = 0
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  POSITION TRACKING & SL / TP                                 ║
+// ║  SL = 1× ATR beyond EMA21, TP = 2× risk (2:1 R:R)          ║
+// ╚══════════════════════════════════════════════════════════════╝
+var float entry_px = na
+var int   position = 0
 
 if buy_signal and position == 0
-    entry_price := close
-    position    := 1
-
+    entry_px := close
+    position := 1
 if sell_signal and position == 0
-    entry_price := close
-    position    := -1
+    entry_px := close
+    position := -1
 
-sl_price = position == 1  ? entry_price - atr_val * 1.0 :
-           position == -1 ? entry_price + atr_val * 1.0 : na
-tp_price = position == 1  ? entry_price + atr_val * 2.0 :
-           position == -1 ? entry_price - atr_val * 2.0 : na
+sl = position ==  1 ? entry_px - atr_val * 1.0 :
+     position == -1 ? entry_px + atr_val * 1.0 : na
+tp = position ==  1 ? entry_px + atr_val * 2.0 :
+     position == -1 ? entry_px - atr_val * 2.0 : na
 
-hit_sl = (position == 1  and low  <= sl_price) or (position == -1 and high >= sl_price)
-hit_tp = (position == 1  and high >= tp_price) or (position == -1 and low  <= tp_price)
-
+hit_sl = not na(sl) and ((position ==  1 and low  <= sl) or (position == -1 and high >= sl))
+hit_tp = not na(tp) and ((position ==  1 and high >= tp) or (position == -1 and low  <= tp))
 close_signal = position != 0 and (hit_sl or hit_tp or eod_time)
 
 if close_signal
-    position    := 0
-    entry_price := na
+    position := 0
+    entry_px := na
 
-// ═══════════════════════════════════════════════════════════════
-// PLOTS
-// ═══════════════════════════════════════════════════════════════
-plot(ema21, title="EMA 21", color=color.orange, linewidth=2)
-plot(ema50, title="EMA 50", color=color.blue,   linewidth=2)
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  PLOTS                                                       ║
+// ╚══════════════════════════════════════════════════════════════╝
+plot(ema21,    "EMA 21",  color=color.new(color.orange, 0),  linewidth=2)
+plot(ema50,    "EMA 50",  color=color.new(color.blue,   0),  linewidth=2)
+plot(ema_200,  "EMA 200", color=color.new(color.gray,  30),  linewidth=1)
+plot(vwap_val, "VWAP",    color=color.new(color.purple, 0),  linewidth=2)
+plot(sl, "SL", color=color.new(color.red,   0), linewidth=1, style=plot.style_linebr)
+plot(tp, "TP", color=color.new(color.green, 0), linewidth=1, style=plot.style_linebr)
 
-plot(bull_fvg_bottom, title="Bull FVG Bot", color=color.new(color.green, 70), linewidth=1, style=plot.style_linebr)
-plot(bull_fvg_top,    title="Bull FVG Top", color=color.new(color.green, 70), linewidth=1, style=plot.style_linebr)
-plot(bear_fvg_bottom, title="Bear FVG Bot", color=color.new(color.red, 70),   linewidth=1, style=plot.style_linebr)
-plot(bear_fvg_top,    title="Bear FVG Top", color=color.new(color.red, 70),   linewidth=1, style=plot.style_linebr)
+// Macro regime background
+bgcolor(uptrend   ? color.new(color.green, 96) : na, title="Uptrend")
+bgcolor(downtrend ? color.new(color.red,   96) : na, title="Downtrend")
 
-plot(sl_price, title="SL", color=color.red,   linewidth=1, style=plot.style_linebr)
-plot(tp_price, title="TP", color=color.green, linewidth=1, style=plot.style_linebr)
+// Sweep markers
+plotshape(bull_sweep, "Bull Sweep", shape.triangleup,   location.belowbar,
+    color.new(color.aqua,   10), size=size.small, text="SWEEP↑", textcolor=color.aqua)
+plotshape(bear_sweep, "Bear Sweep", shape.triangledown, location.abovebar,
+    color.new(color.orange, 10), size=size.small, text="SWEEP↓", textcolor=color.orange)
 
-plotshape(buy_signal,   style=shape.labelup,   location=location.belowbar, color=color.green, text="PB UP",   textcolor=color.white)
-plotshape(sell_signal,  style=shape.labeldown, location=location.abovebar, color=color.red,   text="PB DOWN", textcolor=color.white)
-plotshape(close_signal, style=shape.xcross,    location=location.abovebar, color=color.white, text="EXIT",    textcolor=color.white, size=size.small)
-
-// Sweep markers — helps you visually confirm the stop hunt before entry
-plotshape(bull_sweep, title="Bull Sweep", style=shape.triangleup,   location=location.belowbar, color=color.new(color.aqua, 30),   size=size.small, text="SWEEP↑")
-plotshape(bear_sweep, title="Bear Sweep", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 30), size=size.small, text="SWEEP↓")
-
-bgcolor(uptrend   ? color.new(color.green, 97) : na)
-bgcolor(downtrend ? color.new(color.red,   97) : na)
-
-// ═══════════════════════════════════════════════════════════════
-// ALERTS
-// ═══════════════════════════════════════════════════════════════
+// Signal labels — show what confluence triggered the entry
 if buy_signal
-    alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"ema_pullback","signal":"buy"}',   alert.freq_once_per_bar_close)
+    fvg_tag     = price_in_bull_fvg ? "📦 IN FVG " : recent_bull_fvg ? "📦 FVG " : ""
+    sweep_tag   = recent_bull_s ? "💧 SWEEP " : ""
+    detail      = "▲ PB BUY\n" + fvg_tag + sweep_tag + "RVOL " + str.tostring(rvol,"#.#") + "x"
+    label.new(bar_index, low, detail,
+        style=label.style_label_up, yloc=yloc.belowbar,
+        color=color.new(color.green, 5), textcolor=color.white, size=size.normal)
+
 if sell_signal
-    alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"ema_pullback","signal":"sell"}',  alert.freq_once_per_bar_close)
+    fvg_tag     = price_in_bear_fvg ? "📦 IN FVG " : recent_bear_fvg ? "📦 FVG " : ""
+    sweep_tag   = recent_bear_s ? "💧 SWEEP " : ""
+    detail      = "▼ PB SELL\n" + fvg_tag + sweep_tag + "RVOL " + str.tostring(rvol,"#.#") + "x"
+    label.new(bar_index, high, detail,
+        style=label.style_label_down, yloc=yloc.abovebar,
+        color=color.new(color.red, 5), textcolor=color.white, size=size.normal)
+
 if close_signal
-    alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"ema_pullback","signal":"close"}', alert.freq_once_per_bar_close)
+    reason = hit_sl ? "SL HIT" : hit_tp ? "TP HIT" : "EOD"
+    label.new(bar_index, close, "✖ EXIT\n" + reason,
+        style=label.style_label_down, color=color.new(color.gray, 20), textcolor=color.white, size=size.small)
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  STATUS TABLE  (top-right, real-time factor dashboard)       ║
+// ╚══════════════════════════════════════════════════════════════╝
+if show_tbl
+    var table tbl = table.new(position.top_right, 2, 14,
+        bgcolor      = color.new(color.black, 5),
+        frame_color  = color.new(color.gray,  50),
+        frame_width  = 1,
+        border_color = color.new(color.gray,  70),
+        border_width = 1)
+
+    C_HDR  = color.new(#1a1a2e, 0)
+    C_PASS = color.new(color.teal,  20)
+    C_FAIL = color.new(color.maroon,20)
+    C_NEUT = color.new(color.gray,  40)
+    C_TXT  = color.white
+    SZ     = size.small
+
+    table.cell(tbl, 0, 0, "FACTOR",       bgcolor=C_HDR,  text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 0, "VALUE",        bgcolor=C_HDR,  text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // Ticker guard
+    table.cell(tbl, 0, 1, "Ticker",       bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 1, syminfo.ticker, bgcolor=is_spy ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // Trend (EMA50)
+    trend_txt = uptrend ? "Uptrend (>EMA50)" : "Downtrend (<EMA50)"
+    trend_col = uptrend ? C_PASS : C_FAIL
+    table.cell(tbl, 0, 2, "Trend",        bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 2, trend_txt,      bgcolor=trend_col, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // EMA 21 slope
+    slope_txt = ema21_rising ? "Rising ↗" : ema21_falling ? "Falling ↘" : "Flat →"
+    slope_col = ema21_rising ? C_PASS : ema21_falling ? C_FAIL : C_NEUT
+    table.cell(tbl, 0, 3, "EMA21 Slope",  bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 3, slope_txt,      bgcolor=slope_col, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // Bounce / Rejection
+    bounce_active = bounced_above or rejected_below
+    bounce_txt    = bounced_above ? "Bounced ▲ EMA21" : rejected_below ? "Rejected ▼ EMA21" : "No touch"
+    bounce_col    = bounce_active ? C_PASS : C_FAIL
+    table.cell(tbl, 0, 4, "PB Bounce",    bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 4, bounce_txt,     bgcolor=bounce_col, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // RSI
+    rsi_ok = rsi_bull_pb or rsi_bear_pb
+    table.cell(tbl, 0, 5, "RSI (14)",     bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 5, str.tostring(rsi_val,"#.0"), bgcolor=rsi_ok ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // RVOL
+    table.cell(tbl, 0, 6, "RVOL",         bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 6, str.tostring(rvol,"#.##") + "x", bgcolor=high_rvol ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // vs VWAP
+    table.cell(tbl, 0, 7, "vs VWAP",      bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 7, close > vwap_val ? "Above" : "Below", bgcolor=close > vwap_val ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // Price in FVG zone
+    in_fvg    = price_in_bull_fvg or price_in_bear_fvg
+    in_fvg_txt = price_in_bull_fvg ? "In Bull FVG ✓" : price_in_bear_fvg ? "In Bear FVG ✓" : "Not in FVG"
+    table.cell(tbl, 0, 8, "In FVG Zone",  bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 8, in_fvg_txt,     bgcolor=in_fvg ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // Recent FVG
+    bs_bull = ta.barssince(fvg_bull)
+    bs_bear = ta.barssince(fvg_bear)
+    recent_fvg = recent_bull_fvg or recent_bear_fvg
+    rfvg_txt   = recent_bull_fvg ? "Bull " + str.tostring(bs_bull) + "b ago" :
+                 recent_bear_fvg ? "Bear " + str.tostring(bs_bear) + "b ago" : "None"
+    table.cell(tbl, 0, 9, "Recent FVG",   bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 9, rfvg_txt,       bgcolor=recent_fvg ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // Sweep
+    any_sweep = recent_bull_s or recent_bear_s
+    sweep_val = recent_bull_s ? "Bull ↑ " + str.tostring(ta.barssince(bull_sweep)) + "b ago" :
+                recent_bear_s ? "Bear ↓ " + str.tostring(ta.barssince(bear_sweep)) + "b ago" : "None"
+    table.cell(tbl, 0, 10, "Liq Sweep",   bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 10, sweep_val,     bgcolor=any_sweep ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // Divider
+    table.cell(tbl, 0, 11, "──────────────", bgcolor=C_HDR, text_color=color.new(color.gray,30), text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 11, "──────────",     bgcolor=C_HDR, text_color=color.new(color.gray,30), text_size=SZ, text_halign=text.align_center)
+
+    // Overall signal
+    sig_txt = buy_signal ? "▲ PB BUY" : sell_signal ? "▼ PB SELL" : "WAITING"
+    sig_col = buy_signal ? C_PASS     : sell_signal ? C_FAIL      : C_NEUT
+    table.cell(tbl, 0, 12, "SIGNAL",      bgcolor=C_HDR,   text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 12, sig_txt,       bgcolor=sig_col, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+    // Macro regime (EMA200)
+    bull_200   = close > ema_200
+    regime_txt = bull_200 ? "BULL (>EMA200)" : "BEAR (<EMA200)"
+    regime_col = bull_200 ? C_PASS : C_FAIL
+    table.cell(tbl, 0, 13, "Macro",       bgcolor=C_HDR,   text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
+    table.cell(tbl, 1, 13, regime_txt,    bgcolor=regime_col, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  ALERTS  — condition: "Any alert() function call"            ║
+// ╚══════════════════════════════════════════════════════════════╝
+if buy_signal
+    alert('{"secret":"mysecret123","symbol":"SPY","price":' + str.tostring(close,'#.00') + ',"timeframe":"5m","strategy":"ema_pullback","signal":"buy"}',   alert.freq_once_per_bar_close)
+if sell_signal
+    alert('{"secret":"mysecret123","symbol":"SPY","price":' + str.tostring(close,'#.00') + ',"timeframe":"5m","strategy":"ema_pullback","signal":"sell"}',  alert.freq_once_per_bar_close)
+if close_signal
+    alert('{"secret":"mysecret123","symbol":"SPY","price":' + str.tostring(close,'#.00') + ',"timeframe":"5m","strategy":"ema_pullback","signal":"close"}', alert.freq_once_per_bar_close)

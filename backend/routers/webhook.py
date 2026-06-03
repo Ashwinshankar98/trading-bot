@@ -125,57 +125,124 @@ async def _close_trades_for_strategy(symbol: str, price: float, strategy_id: str
             )
 
 
+def _gate_report(symbol: str, signal: str, price: float, strategy_id: str,
+                  regime_data: dict, factor: dict, candidates: list,
+                  decision: dict = None, final_status: str = "REJECTED") -> str:
+    """
+    Build a Telegram message showing every gate's pass/fail result.
+    Sent for every buy/sell signal — tells the user exactly what happened.
+    """
+    T   = lambda b: "✅" if b else "❌"
+    S   = STRATEGY_NAMES.get(strategy_id, strategy_id)
+    vix = regime_data.get("vix") or 0
+    f   = factor.get("factors", {})
+    sc  = factor.get("score", 0)
+
+    vix_ok    = vix == 0 or vix <= 30
+    factor_ok = sc >= 3
+    opts_ok   = bool(candidates)
+
+    lines = [
+        f"📡 <b>{signal.upper()} {symbol} @ ${price:.2f}</b>  [{S}]",
+        f"Regime: <b>{regime_data.get('regime','?')}</b> ({regime_data.get('trend','?')}) "
+        f"| VIX: {vix if vix else '?'} | ATR: {regime_data.get('atr_pct','?')}%",
+        "",
+        "<b>Gate Results:</b>",
+        f"  {T(vix_ok)} Gate 1 — VIX ≤ 30  (current: {vix})",
+        f"  {T(factor_ok)} Gate 2 — Score {sc}/5  (need ≥3)",
+        f"    {T(f.get('momentum'))}  Momentum  (RSI={indicators_cache.get('rsi','?')}  MACD hist={'+ ' if (indicators_cache.get('macd') or {}).get('histogram',0) > 0 else '−'})",
+        f"    {T(f.get('trend'))}  Trend  (EMA fast {'>' if f.get('trend') else '<'} slow)",
+        f"    {T(f.get('vwap'))}  VWAP  (price {'above' if f.get('vwap') else 'below'})",
+        f"    {T(f.get('adx_trending'))}  ADX  (={indicators_cache.get('adx','?')}  need >20)",
+        f"    {T(f.get('fvg_or_sweep'))}  FVG / Sweep  ({'active' if f.get('fvg_or_sweep') else 'none'})",
+    ]
+
+    if factor_ok:
+        lines.append(f"  {T(opts_ok)} Gate 3 — Options  ({len(candidates)} liquid candidates)")
+
+    if decision:
+        conf       = decision.get("confidence", 0)
+        threshold  = 0.70
+        claude_ok  = decision["action"] == "open" and conf >= threshold
+        lines += [
+            f"  {T(claude_ok)} Gate 4 — Claude  (confidence {conf:.0%}  need ≥70%)",
+            f"            R:R = {decision.get('rr_ratio','?')}:1",
+            f"            \"{decision.get('reasoning','')[:120]}\"",
+        ]
+
+    lines += ["", f"{'🟢' if final_status == 'OPENED' else '🔴'} <b>{final_status}</b>"]
+    return "\n".join(lines)
+
+
+# Module-level cache so _gate_report can access current indicators
+# (set at the start of each signal processing call)
+indicators_cache: dict = {}
+
+
 async def _process_signal_inner(symbol: str, signal: str, price: float, strategy_id: str):
+    global indicators_cache
+
     # ── Close signal ──────────────────────────────────────────────────────────
     if signal == "close":
         await _close_trades_for_strategy(symbol, price, strategy_id)
         return
 
-    # ── Buy / Sell — fetch market context (run blocking I/O in threads) ──────
-    print(f"[SIGNAL] Fetching indicators for {symbol}", flush=True)
+    # ── Buy / Sell — fetch market context ────────────────────────────────────
+    print(f"[SIGNAL] {strategy_id} {signal.upper()} {symbol} @ {price:.2f}", flush=True)
     indicators = await asyncio.to_thread(get_all_indicators, symbol)
-    print(f"[SIGNAL] Indicators: {indicators}", flush=True)
-
+    indicators_cache = indicators                          # used by _gate_report
     regime_data = await asyncio.to_thread(detect_regime, symbol)
     account     = get_strategy_account(strategy_id)
     strategy    = get_active_strategy()
     print(f"[SIGNAL] Regime: {regime_data}", flush=True)
 
-    # ── VIX gate — skip if panic regime (slide 4) ────────────────────────────
+    # Pre-compute factor score so _gate_report always has it even on early exits
+    factor = multi_factor_score(indicators, signal)
+    candidates: list = []     # filled later if gates pass
+
+    # ── Gate 1: VIX ──────────────────────────────────────────────────────────
     vix = regime_data.get("vix") or 0
     if vix > 30:
-        print(f"[SIGNAL] Skipping — VIX={vix} too high (panic regime)", flush=True)
+        print(f"[SIGNAL] ❌ Gate 1 FAILED — VIX={vix}", flush=True)
+        await send_telegram(_gate_report(symbol, signal, price, strategy_id,
+                                         regime_data, factor, candidates,
+                                         final_status="REJECTED — VIX panic regime"))
         return
 
-    # ── Multi-factor gate (5 factors: momentum/trend/VWAP/ADX/FVG-sweep) ─────
-    factor = multi_factor_score(indicators, signal)
-    print(f"[SIGNAL] Multi-factor score: {factor['score']}/5 — {factor['factors']}", flush=True)
+    # ── Gate 2: Multi-factor ─────────────────────────────────────────────────
+    print(f"[SIGNAL] Multi-factor {factor['score']}/5 — {factor['factors']}", flush=True)
     if factor["score"] < 3:
-        print(f"[SIGNAL] Skipping — only {factor['score']}/5 factors aligned (need ≥3)", flush=True)
+        print(f"[SIGNAL] ❌ Gate 2 FAILED — {factor['score']}/5 factors", flush=True)
+        await send_telegram(_gate_report(symbol, signal, price, strategy_id,
+                                         regime_data, factor, candidates,
+                                         final_status=f"REJECTED — only {factor['score']}/5 factors aligned"))
         return
 
-    # ── Fetch options candidates ──────────────────────────────────────────────
-    print(f"[SIGNAL] Fetching options candidates for {symbol} signal={signal}", flush=True)
+    # ── Gate 3: Options candidates ───────────────────────────────────────────
+    print(f"[SIGNAL] Fetching options candidates...", flush=True)
     candidates = await asyncio.to_thread(get_option_candidates, price, signal)
-    print(f"[SIGNAL] {len(candidates)} candidates found", flush=True)
-
+    print(f"[SIGNAL] {len(candidates)} candidates", flush=True)
     if not candidates:
-        print("[SIGNAL] No liquid options available — skipping", flush=True)
+        print("[SIGNAL] ❌ Gate 3 FAILED — no liquid options", flush=True)
+        await send_telegram(_gate_report(symbol, signal, price, strategy_id,
+                                         regime_data, factor, candidates,
+                                         final_status="REJECTED — no liquid options available"))
         return
 
-    # ── Claude decides (hedge fund quant mode) ────────────────────────────────
+    # ── Gate 4: Claude ───────────────────────────────────────────────────────
     decision = await asyncio.to_thread(
         decide_options_trade, symbol, signal, indicators,
         regime_data, account, strategy, candidates, factor
     )
-    print(f"[SIGNAL] Decision: action={decision['action']} confidence={decision['confidence']:.2f} "
-          f"rr={decision.get('rr_ratio','?')} contract={decision.get('chosen_contract')}", flush=True)
-    print(f"[SIGNAL] Reasoning: {decision.get('reasoning', '')[:150]}", flush=True)
+    print(f"[SIGNAL] Claude: action={decision['action']} confidence={decision['confidence']:.2f} "
+          f"rr={decision.get('rr_ratio','?')}", flush=True)
 
-    # Minimum confidence 0.70 regardless of strategy setting (slide 1/3)
     threshold = max(strategy.get("entry_threshold", 0.60), 0.70)
     if decision["action"] != "open" or decision["confidence"] < threshold:
-        print(f"[SIGNAL] Skipped — confidence={decision['confidence']:.2f} threshold={threshold:.2f}", flush=True)
+        print(f"[SIGNAL] ❌ Gate 4 FAILED — confidence={decision['confidence']:.2f}", flush=True)
+        await send_telegram(_gate_report(symbol, signal, price, strategy_id,
+                                         regime_data, factor, candidates, decision,
+                                         final_status=f"REJECTED — Claude {decision['confidence']:.0%} confidence"))
         return
 
     # ── Find chosen candidate ─────────────────────────────────────────────────
@@ -201,16 +268,15 @@ async def _process_signal_inner(symbol: str, signal: str, price: float, strategy
         return
 
     g = candidate["greeks"]
+    gate_summary = _gate_report(symbol, signal, price, strategy_id,
+                                 regime_data, factor, candidates, decision,
+                                 final_status="OPENED")
     await send_telegram(
-        f"🟢 <b>OPTION TRADE OPENED</b>\n"
-        f"Strategy: {STRATEGY_NAMES.get(strategy_id, strategy_id)}\n"
-        f"Contract: {candidate['symbol']}\n"
+        gate_summary + "\n\n"
+        f"<b>Contract:</b> {candidate['symbol']}\n"
         f"Strike: ${candidate['strike']} | {candidate['moneyness']} | {candidate['option_type'].upper()}\n"
-        f"Premium: ${alpaca_result['fill_price']:.2f} x {contracts} = ${alpaca_result['fill_price']*100*contracts:.0f}\n"
-        f"IV: {candidate['iv']*100:.1f}% | Delta: {g['delta']} | Theta: ${g['theta']:.3f}/day\n"
-        f"Regime: {regime_str} | Trend: {regime_data.get('trend','?')} | VIX: {regime_data.get('vix','?')}\n"
-        f"Factors: {factor['score']}/4 | R:R: {decision.get('rr_ratio','3')}:1 | Confidence: {decision['confidence']:.0%}\n"
-        f"Reason: {decision.get('reasoning', '')[:120]}"
+        f"Premium: ${alpaca_result['fill_price']:.2f} × {contracts} = ${alpaca_result['fill_price']*100*contracts:.0f}\n"
+        f"IV: {candidate['iv']*100:.1f}% | Delta: {g['delta']} | Theta: ${g['theta']:.3f}/day"
     )
 
 
