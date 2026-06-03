@@ -1,6 +1,6 @@
 # Trading Bot
 
-An AI-powered paper trading bot that receives TradingView signals, runs them through a multi-stage quality filter, and uses Claude as a hedge fund quant to decide whether to execute options trades.
+An AI-powered paper trading bot that receives TradingView signals, runs them through a multi-stage quality filter, and uses Claude as a hedge fund quant to decide whether to execute SPY options trades on Alpaca.
 
 ## Stack
 
@@ -19,86 +19,157 @@ An AI-powered paper trading bot that receives TradingView signals, runs them thr
 ## How It Works — The Full Pipeline
 
 ```
-TradingView Alert
+TradingView Alert (SPY 5m chart)
       │
       ▼
 POST /webhook/tradingview
       │
-      ├─ [1] Log signal to DB immediately → return 200 to TradingView
+      ├─ Log signal to DB immediately → return 200 to TradingView
       │
-      └─ Background task starts:
+      └─ Background task:
             │
-            ├─ Fetch live indicators (RSI, MACD, EMA cross, VWAP, Bollinger, ADX, ATR)
+            ├─ Fetch live indicators: RSI, MACD, EMA, VWAP, ADX, ATR,
+            │  RVOL, Fair Value Gaps, Liquidity Sweep
             │
-            ├─ Detect market regime → trend + volatility + volume + VIX + 10-yr yield
+            ├─ Detect market regime → trend + volatility + VIX + 10-yr yield
             │
-            ├─ GATE 1: VIX > 30? → SKIP (panic market, options pricing unreliable)
+            ├─ GATE 1 — VIX > 30?
+            │     YES → Telegram: "❌ Gate 1 FAILED — panic regime"  → STOP
             │
-            ├─ GATE 2: Multi-factor score < 2/4? → SKIP (momentum + trend + VWAP + ADX)
+            ├─ GATE 2 — Multi-factor score < 3/5?
+            │     YES → Telegram: "❌ Gate 2 FAILED — X/5 factors"   → STOP
             │
-            ├─ Fetch live ATM options candidates from Alpaca
+            ├─ GATE 3 — No liquid options candidates?
+            │     YES → Telegram: "❌ Gate 3 FAILED — no liquid opts" → STOP
             │
-            ├─ CLAUDE (hedge fund quant mode):
-            │     - Reviews all 4 regime dimensions
-            │     - Reviews macro context (VIX, 10-yr yield)
-            │     - Reviews 4-factor alignment score
-            │     - Reviews each option's greeks (delta, theta, IV, spread)
-            │     - Enforces 3:1 reward-to-risk (stop = -50% premium, target = +150%)
-            │     - Returns: action, contract, contracts, confidence, rr_ratio, reasoning
-            │
-            ├─ GATE 3: Confidence < 0.70? → SKIP
+            ├─ GATE 4 — Claude confidence < 0.70?
+            │     YES → Telegram: "❌ Gate 4 FAILED — XX% confidence" → STOP
             │
             ├─ Submit buy order to Alpaca
-            │
-            ├─ Record trade in DB with full context
-            │
-            └─ Send Telegram alert
+            ├─ Record trade in DB
+            └─ Telegram: full gate summary + contract details
 ```
 
-### What "Signals" Are
-
-You set up strategies in TradingView (EMA Cross, ORB, EMA Pullback). Each strategy fires an alert when its conditions trigger. That alert hits the webhook with:
-```json
-{
-  "secret": "your-secret",
-  "symbol": "SPY",
-  "signal": "buy",
-  "price": 548.20,
-  "strategy": "ema_cross"
-}
-```
-
-Claude does **not** generate the signal — TradingView does. Claude's job is to **decide whether the signal is worth acting on** given the current market context.
+Every signal — whether it fires or gets rejected — produces a Telegram message showing exactly which gates passed and which failed.
 
 ---
 
-## Quality Gates (What's New)
+## The 5-Factor Gate (Gate 2)
 
-Before Claude is even called, two hard gates filter out low-quality signals:
+Before Claude is called, five technical factors are scored. The signal needs **at least 3/5** to proceed:
 
-### Gate 1 — VIX Gate
-If the VIX (fear index) is above 30, the whole signal is dropped. In panic markets, options premiums are inflated and directional plays fail.
-
-### Gate 2 — Multi-Factor Score (≥ 2/4 required)
-Four technical factors are scored and the signal must get at least 2/4:
-
-| Factor | Long (buy) condition | Short (sell) condition |
-|--------|---------------------|----------------------|
-| Momentum | RSI 40–70 AND MACD histogram > 0 | RSI 30–60 AND MACD histogram < 0 |
+| Factor | Long (buy) | Short (sell) |
+|--------|-----------|-------------|
+| Momentum | RSI 40–70 AND MACD hist > 0 | RSI 30–60 AND MACD hist < 0 |
 | Trend | EMA fast > EMA slow | EMA fast < EMA slow |
 | VWAP | Price above VWAP | Price below VWAP |
-| ADX | ADX > 20 (market is trending, not choppy) | ADX > 20 |
+| ADX | ADX > 20 (trending market) | ADX > 20 |
+| SMC | Bullish FVG or bull sweep present | Bearish FVG or bear sweep present |
 
-If fewer than 2 pass → signal is skipped without calling Claude (saves tokens, blocks bad trades).
+This gate runs before any API call to Claude — it blocks low-quality signals cheaply.
 
-### Gate 3 — Confidence Threshold (≥ 0.70)
-Claude's confidence score must be 0.70 or higher. Previously this was 0.60. Missing good trades is better than taking bad ones.
+---
+
+## What You See in Telegram (for every signal)
+
+```
+📡 BUY SPY @ $542.10  [EMA Cross + VWAP]
+Regime: trending (bullish) | VIX: 18 | ATR: 0.8%
+
+Gate Results:
+  ✅ Gate 1 — VIX ≤ 30  (current: 18)
+  ✅ Gate 2 — Score 4/5  (need ≥3)
+    ✅  Momentum  (RSI=58  MACD hist=+)
+    ✅  Trend  (EMA fast > slow)
+    ✅  VWAP  (price above)
+    ✅  ADX  (=27  need >20)
+    ❌  FVG / Sweep  (none)
+  ✅ Gate 3 — Options  (3 liquid candidates)
+  ✅ Gate 4 — Claude  (confidence 82%  need ≥70%)
+            R:R = 3.2:1
+            "Bullish EMA cross with strong ADX confirms trend..."
+
+🟢 OPENED
+
+Contract: SPY250620C00542000
+Strike: $542 | ATM | CALL
+Premium: $2.45 × 2 = $490
+IV: 18.3% | Delta: 0.52 | Theta: $-0.14/day
+```
+
+Rejected signals look the same but end with `🔴 REJECTED — reason`.
+
+---
+
+## TradingView Pine Scripts
+
+Three strategies live in `scripts/`. All are **SPY-only** — an on-chart warning label appears if you load them on any other ticker.
+
+### Strategy 1 — EMA Cross + FVG + Sweep (`strategy_1_ema_cross.pine`)
+Triggers when EMA 9 crosses EMA 21 with VWAP, RSI, MACD, ADX, RVOL, and SMC confluence all aligned.
+
+### Strategy 2 — ORB + FVG + Sweep (`strategy_2_orb.pine`)
+Captures the Opening Range Breakout (first 15 minutes, 9:30–9:45). Fires when price breaks above/below the range with RVOL and SMC confluence. Best setup: the opposite side of the range is swept (inducement) before the breakout.
+
+### Strategy 3 — EMA 21 Pullback + FVG + Sweep (`strategy_3_ema_pullback.pine`)
+Triggers when price pulls back to EMA 21 in the direction of EMA 50 trend and bounces, confirmed by RSI, RVOL, and a nearby FVG or prior liquidity sweep.
+
+### Visual Features (all 3 scripts)
+
+| Feature | What you see |
+|---------|-------------|
+| FVG zones | Green/red shaded boxes for bullish/bearish Fair Value Gaps. Last 5 per direction. Box fades when price enters the zone (partially mitigated). |
+| Sweep markers | Aqua `SWEEP↑` triangle below bar / orange `SWEEP↓` triangle above bar when a liquidity sweep occurs |
+| Signal labels | Every entry shows `▲ BUY` or `▼ SELL` with which confluence fired: `📦 FVG`, `💧 SWEEP`, and RVOL value |
+| Exit labels | `✖ EXIT` with reason: `SL HIT`, `TP HIT`, or `EOD` |
+| Status table | Top-right corner — all factors live with teal (✓) / maroon (✗) color coding |
+| Regime background | Subtle green tint = uptrend, red tint = downtrend |
+| SL / TP lines | Dashed lines on chart tracking the active position's stop and target |
+
+---
+
+## How to Set Up in TradingView
+
+### Step 1 — Add the scripts
+
+1. Open TradingView → load **SPY** → set timeframe to **5 minutes**
+2. Click **Pine Script Editor** (bottom panel) → paste a `.pine` file → **Save** → **Add to Chart**
+3. Repeat for all 3 strategies (you can stack all 3 on the same chart)
+
+### Step 2 — Create one alert per strategy
+
+For each strategy indicator:
+
+1. Click the **Alerts** clock icon → **Create Alert**
+2. Fill in:
+
+| Field | Value |
+|-------|-------|
+| Condition | Select the strategy name → **"Any alert() function call"** |
+| Trigger | **Once Per Bar Close** |
+| Webhook URL | `https://your-render-url.onrender.com/webhook/tradingview` |
+| Message | Leave blank (each alert sends its own JSON payload) |
+
+That's 3 alerts total — one per strategy.
+
+> The scripts send the webhook payload themselves via `alert()`. You don't type anything into the "Message" field.
+
+### Step 3 — Verify it's working
+
+After the market opens, send a test signal:
+```bash
+curl -X POST https://your-api.onrender.com/webhook/test \
+  -H "Content-Type: application/json" \
+  -d '{"symbol":"SPY","side":"long","price":542.00,"strategy":"ema_cross"}'
+```
+
+You should get a Telegram message and see a test trade in the dashboard.
 
 ---
 
 ## Market Regime Detection
 
-Every signal now triggers a full market regime analysis before Claude is called:
+Every signal triggers a full regime analysis:
 
 ```json
 {
@@ -116,96 +187,56 @@ Every signal now triggers a full market regime analysis before Claude is called:
 ```
 
 Claude sees all of this and uses it to decide:
-- Don't buy calls if trend is `bear`
-- Don't enter any directional trade if regime is `volatile`
-- Strategy recommendations tell Claude what's working right now
+- No calls in a bear trend; no puts in a bull trend (unless volatility regime)
+- Skip if VIX > 30 (panic market, options pricing unreliable)
+- Recommended strategies tell Claude what's working right now
 
 ---
 
 ## Claude — Hedge Fund Quant Mode
 
-Claude's system prompt instructs it to act as a **hedge fund quantitative options trader**:
+Claude's system prompt gives it a hedge fund quantitative options trader persona. **All conditions must pass before it opens a trade:**
 
-**Entry criteria (all must pass):**
 1. Signal direction matches macro trend
-2. Minimum 3:1 reward-to-risk ratio
-3. IV < 45% (don't buy expensive options)
+2. Minimum 3:1 reward-to-risk (stop = −50% premium, target = +150% premium)
+3. IV < 45%
 4. Bid-ask spread < 15% of mid
 5. Confidence ≥ 0.70
-6. Multi-factor score ≥ 2/4
+6. Multi-factor score ≥ 2/5
 
-**R:R enforcement:**
-- Stop loss = −50% of premium paid
-- Take profit = +150% of premium paid
-- Effective R:R = 3:1 on every trade
-
-**Prompt caching:** The system prompt is cached by the Anthropic API, so repeated calls within 5 minutes reuse the cached context — reducing token usage by ~40%.
+**Prompt caching** is used on the system message — repeated calls within 5 minutes reuse the cached context, saving ~40% tokens.
 
 ---
 
 ## Self-Improvement (Weekly)
 
-Every Monday at 9 AM ET, Claude reviews the past week's performance across all 3 strategies and updates the shared strategy rules. It acts as a **quant analyst** targeting:
-- Higher Sharpe ratio
-- Lower drawdown
-- entry_threshold is never allowed below 0.70
-
-The improvement cycle saves a new versioned strategy to the DB and activates it automatically.
+Every Monday at 9 AM ET, Claude reviews the past week's performance across all 3 strategies and updates the shared strategy rules. The `entry_threshold` is never allowed below 0.70. The improved strategy is saved to the DB and activated automatically.
 
 ---
 
-## New API Endpoints
+## API Endpoints
 
-### Backtesting (Slide 2)
-```
-GET /strategy/backtest/{symbol}?period_years=2&fast=9&slow=21&sl_pct=0.02&tp_pct=0.04
-```
-Returns historical performance of the EMA-cross strategy:
-- CAGR, Sharpe ratio, max drawdown, win rate
-- Profit factor (avg win × wins / avg loss × losses)
-- Long vs short win rates
-- When the strategy performs best and what breaks it
+### Webhooks
+| Endpoint | Description |
+|----------|-------------|
+| `POST /webhook/tradingview` | Receive TradingView alert, run gate pipeline |
+| `POST /webhook/test` | Force open a test trade (bypasses Claude) |
 
-Example:
-```bash
-curl https://your-api.onrender.com/strategy/backtest/SPY?period_years=2
-```
+### Trades
+| Endpoint | Description |
+|----------|-------------|
+| `GET /trades/` | Trade history with filtering |
+| `GET /trades/account` | Total capital and P&L |
+| `GET /trades/strategies` | Per-strategy breakdown |
+| `GET /trades/matrix` | P&L matrix (strategy × ticker) |
+| `GET /trades/{id}/journal` | Claude's post-mortem for a trade |
 
-### Monte Carlo Simulation (Slide 9)
-```
-POST /strategy/monte-carlo?win_rate=0.40&avg_win_pct=4.0&avg_loss_pct=-2.0&n_trades=50
-```
-Runs 1000 simulated paths with the given statistics and shows:
-- Probability of losing money
-- P5/P25/P50/P75/P95 return distribution
-- Worst and best case
-- Robustness assessment (robust / moderate / fragile)
-
-### Monte Carlo from Real History
-```
-GET /strategy/monte-carlo/from-history?strategy_id=all
-```
-Same simulation but automatically uses your actual closed trade win rate, avg win, and avg loss.
-
----
-
-## What You See in the Dashboard
-
-The dashboard reads from these endpoints:
-
-| Dashboard section | Endpoint |
-|------------------|----------|
-| Total capital / P&L | `GET /trades/account` |
-| Strategy breakdown cards | `GET /trades/strategies` |
-| P&L matrix (strategy × ticker) | `GET /trades/matrix` |
-| Trade list with filtering | `GET /trades/` |
-| Trade reasoning (Claude's explanation) | `GET /trades/{id}/journal` |
-
-**What changes visually with the new pipeline:**
-- Fewer trades overall (multi-factor gate + higher confidence threshold will skip more signals)
-- Higher quality trades that do get through (Claude has richer context)
-- Telegram alerts now include: regime + trend + VIX + factor score + R:R ratio
-- No new dashboard UI panels yet — the backtest and Monte Carlo are API-only for now
+### Strategy & Backtesting
+| Endpoint | Description |
+|----------|-------------|
+| `GET /strategy/backtest/{symbol}` | Historical EMA-cross backtest (CAGR, Sharpe, drawdown, win rate) |
+| `POST /strategy/monte-carlo` | 1000-path Monte Carlo simulation |
+| `GET /strategy/monte-carlo/from-history` | Monte Carlo using actual closed trade stats |
 
 ---
 
@@ -215,26 +246,26 @@ The dashboard reads from these endpoints:
 trading-bot/
 ├── backend/
 │   ├── main.py                  # FastAPI app + APScheduler
-│   ├── database.py              # SQLite schema + connection
+│   ├── database.py              # SQLite schema
 │   ├── core/
-│   │   ├── paper_trader.py      # Virtual account + trade recording
-│   │   ├── indicators.py        # RSI, MACD, EMA, VWAP, Bollinger, ADX, ATR
-│   │   │                        # + volume_analysis, get_macro_indicators, multi_factor_score
-│   │   ├── regime.py            # Rich market regime detection (trend/volatility/volume/VIX)
-│   │   ├── llm.py               # Claude hedge fund quant (prompt-cached, R:R enforced)
-│   │   ├── backtester.py        # Historical backtest + Monte Carlo simulation
+│   │   ├── indicators.py        # RSI, MACD, EMA, VWAP, ADX, ATR,
+│   │   │                        # RVOL, FVG detection, liquidity sweep
+│   │   ├── regime.py            # Rich market regime detection
+│   │   ├── llm.py               # Claude hedge fund quant (prompt-cached)
+│   │   ├── backtester.py        # Historical backtest + Monte Carlo
 │   │   ├── options.py           # Alpaca options chain + order submission
+│   │   ├── paper_trader.py      # Virtual account + trade recording
 │   │   └── improver.py          # Weekly self-improvement cycle
-│   ├── routers/
-│   │   ├── webhook.py           # TradingView signal handler + 3 quality gates
-│   │   ├── trades.py            # Trade history + account summary endpoints
-│   │   ├── strategy.py          # Strategy versions + backtest + Monte Carlo endpoints
-│   │   └── improve.py           # Manual improvement trigger + history
-│   └── models/
-│       └── schemas.py
+│   └── routers/
+│       ├── webhook.py           # Signal handler + 4 quality gates + Telegram
+│       ├── trades.py            # Trade history + account endpoints
+│       ├── strategy.py          # Strategy + backtest + Monte Carlo endpoints
+│       └── improve.py           # Manual improvement trigger
 ├── frontend/                    # React dashboard
 ├── scripts/
-│   └── weekly_review.py
+│   ├── strategy_1_ema_cross.pine     # EMA Cross + FVG + Sweep [SPY Only]
+│   ├── strategy_2_orb.pine           # ORB + FVG + Sweep [SPY Only]
+│   └── strategy_3_ema_pullback.pine  # EMA 21 Pullback + FVG + Sweep [SPY Only]
 ├── requirements.txt
 ├── render.yaml
 └── .env.example
@@ -249,7 +280,7 @@ trading-bot/
 git clone <your-repo-url>
 cd trading-bot/backend
 python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -261,7 +292,7 @@ cp .env.example .env
 # ALPACA_API_KEY=
 # ALPACA_SECRET_KEY=
 # ALPACA_BASE_URL=https://paper-api.alpaca.markets
-# WEBHOOK_SECRET=
+# WEBHOOK_SECRET=mysecret123
 # TELEGRAM_BOT_TOKEN=
 # TELEGRAM_CHAT_ID=
 ```
@@ -272,29 +303,4 @@ cd backend
 uvicorn main:app --reload --port 8000
 ```
 
-### 4. API docs
-- Swagger: http://localhost:8000/docs
-- Health: http://localhost:8000/health
-
----
-
-## TradingView Alert Setup
-
-In TradingView, set each alert's webhook URL to:
-```
-https://your-api.onrender.com/webhook/tradingview?symbol=SPY
-```
-
-Alert message body (JSON):
-```json
-{
-  "secret": "your-webhook-secret",
-  "symbol": "{{ticker}}",
-  "signal": "buy",
-  "price": {{close}},
-  "strategy": "ema_cross"
-}
-```
-
-Strategy values: `ema_cross`, `orb`, `ema_pullback`
-Signal values: `buy`, `sell`, `close`
+API docs: http://localhost:8000/docs
