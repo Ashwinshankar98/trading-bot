@@ -1,7 +1,16 @@
-import os, json
+import os, json, re
 import anthropic
 
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+
+def _parse_json(text: str) -> dict:
+    """Parse JSON from Claude response, stripping markdown code fences if present."""
+    text = text.strip()
+    # Remove ```json ... ``` or ``` ... ``` wrappers
+    text = re.sub(r"^```[a-z]*\n?", "", text)
+    text = re.sub(r"\n?```$", "", text.strip())
+    return json.loads(text.strip())
 
 # Cached system prompt — hedge fund quant persona (slide 1, 3, 8)
 _OPTIONS_SYSTEM = """\
@@ -60,7 +69,7 @@ Respond ONLY with valid JSON:
     )
     text = response.content[0].text.strip()
     try:
-        return json.loads(text)
+        return _parse_json(text)
     except Exception:
         return {"action": "skip", "side": None, "confidence": 0.0,
                 "reasoning": f"JSON parse error: {text[:200]}"}
@@ -171,7 +180,7 @@ Respond ONLY with valid JSON (no markdown):
     )
     text = response.content[0].text.strip()
     try:
-        return json.loads(text)
+        return _parse_json(text)
     except Exception:
         return {"action": "skip", "chosen_contract": None, "contracts": 0,
                 "confidence": 0.0, "rr_ratio": 0.0,
@@ -196,6 +205,6 @@ Respond ONLY with valid JSON:
     )
     text = response.content[0].text.strip()
     try:
-        return json.loads(text)
+        return _parse_json(text)
     except Exception:
         return {"what_worked": "N/A", "what_failed": text[:200], "market_notes": ""}

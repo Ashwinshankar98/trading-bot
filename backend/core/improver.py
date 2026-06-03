@@ -1,7 +1,15 @@
 import json
 import os
+import re
 import anthropic
 from database import get_connection
+
+
+def _parse_json(text: str) -> dict:
+    text = text.strip()
+    text = re.sub(r"^```[a-z]*\n?", "", text)
+    text = re.sub(r"\n?```$", "", text.strip())
+    return json.loads(text.strip())
 
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
@@ -136,7 +144,7 @@ Respond ONLY with valid JSON:
 
     text = response.content[0].text.strip()
     try:
-        return json.loads(text)
+        return _parse_json(text)
     except Exception:
         return {
             "updated_rules": current_rules.get("rules", {}),
