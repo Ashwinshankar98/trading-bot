@@ -126,7 +126,7 @@ Respond ONLY with valid JSON:
     {{"parameter": "entry_threshold", "before": 0.65, "after": 0.72, "reason": "win rate 14% — raising selectivity"}}
   ],
   "skip_reason": null
-}}
+}}"""
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
