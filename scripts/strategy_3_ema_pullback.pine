@@ -219,25 +219,20 @@ plotshape(bear_sweep, "Bear Sweep", shape.triangledown, location.abovebar,
 
 // Signal labels — show what confluence triggered the entry
 if buy_signal
-    fvg_tag     = price_in_bull_fvg ? "📦 IN FVG " : recent_bull_fvg ? "📦 FVG " : ""
-    sweep_tag   = recent_bull_s ? "💧 SWEEP " : ""
-    detail      = "▲ PB BUY\n" + fvg_tag + sweep_tag + "RVOL " + str.tostring(rvol,"#.#") + "x"
-    label.new(bar_index, low, detail,
-        style=label.style_label_up, yloc=yloc.belowbar,
-        color=color.new(color.green, 5), textcolor=color.white, size=size.normal)
+    _fvg  = price_in_bull_fvg ? "[IN FVG] " : recent_bull_fvg ? "[FVG] " : ""
+    _sw   = recent_bull_s ? "[SWEEP] " : ""
+    _dtl  = "PB BUY  " + _fvg + _sw + "RVOL " + str.tostring(rvol,"#.#") + "x"
+    label.new(bar_index, low, _dtl, style=label.style_label_up, yloc=yloc.belowbar, color=color.new(color.green, 5), textcolor=color.white, size=size.normal)
 
 if sell_signal
-    fvg_tag     = price_in_bear_fvg ? "📦 IN FVG " : recent_bear_fvg ? "📦 FVG " : ""
-    sweep_tag   = recent_bear_s ? "💧 SWEEP " : ""
-    detail      = "▼ PB SELL\n" + fvg_tag + sweep_tag + "RVOL " + str.tostring(rvol,"#.#") + "x"
-    label.new(bar_index, high, detail,
-        style=label.style_label_down, yloc=yloc.abovebar,
-        color=color.new(color.red, 5), textcolor=color.white, size=size.normal)
+    _fvg  = price_in_bear_fvg ? "[IN FVG] " : recent_bear_fvg ? "[FVG] " : ""
+    _sw   = recent_bear_s ? "[SWEEP] " : ""
+    _dtl  = "PB SELL  " + _fvg + _sw + "RVOL " + str.tostring(rvol,"#.#") + "x"
+    label.new(bar_index, high, _dtl, style=label.style_label_down, yloc=yloc.abovebar, color=color.new(color.red, 5), textcolor=color.white, size=size.normal)
 
 if close_signal
-    reason = hit_sl ? "SL HIT" : hit_tp ? "TP HIT" : "EOD"
-    label.new(bar_index, close, "✖ EXIT\n" + reason,
-        style=label.style_label_down, color=color.new(color.gray, 20), textcolor=color.white, size=size.small)
+    _reason = hit_sl ? "SL HIT" : hit_tp ? "TP HIT" : "EOD"
+    label.new(bar_index, close, "EXIT - " + _reason, style=label.style_label_down, color=color.new(color.gray, 20), textcolor=color.white, size=size.small)
 
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  STATUS TABLE  (top-right, real-time factor dashboard)       ║
@@ -297,8 +292,8 @@ if show_tbl
     table.cell(tbl, 1, 7, close > vwap_val ? "Above" : "Below", bgcolor=close > vwap_val ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
 
     // Price in FVG zone
-    in_fvg    = price_in_bull_fvg or price_in_bear_fvg
-    in_fvg_txt = price_in_bull_fvg ? "In Bull FVG ✓" : price_in_bear_fvg ? "In Bear FVG ✓" : "Not in FVG"
+    in_fvg     = price_in_bull_fvg or price_in_bear_fvg
+    in_fvg_txt = price_in_bull_fvg ? "In Bull FVG" : price_in_bear_fvg ? "In Bear FVG" : "Not in FVG"
     table.cell(tbl, 0, 8, "In FVG Zone",  bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
     table.cell(tbl, 1, 8, in_fvg_txt,     bgcolor=in_fvg ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
 
@@ -306,15 +301,15 @@ if show_tbl
     bs_bull = ta.barssince(fvg_bull)
     bs_bear = ta.barssince(fvg_bear)
     recent_fvg = recent_bull_fvg or recent_bear_fvg
-    rfvg_txt   = recent_bull_fvg ? "Bull " + str.tostring(bs_bull) + "b ago" :
-                 recent_bear_fvg ? "Bear " + str.tostring(bs_bear) + "b ago" : "None"
+    rfvg_txt   = recent_bull_fvg ? "Bull " + str.tostring(bs_bull) + "b ago" : recent_bear_fvg ? "Bear " + str.tostring(bs_bear) + "b ago" : "None"
     table.cell(tbl, 0, 9, "Recent FVG",   bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
     table.cell(tbl, 1, 9, rfvg_txt,       bgcolor=recent_fvg ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
 
     // Sweep
     any_sweep = recent_bull_s or recent_bear_s
-    sweep_val = recent_bull_s ? "Bull ↑ " + str.tostring(ta.barssince(bull_sweep)) + "b ago" :
-                recent_bear_s ? "Bear ↓ " + str.tostring(ta.barssince(bear_sweep)) + "b ago" : "None"
+    _bs_bull_sw = ta.barssince(bull_sweep)
+    _bs_bear_sw = ta.barssince(bear_sweep)
+    sweep_val   = recent_bull_s ? "Bull " + str.tostring(_bs_bull_sw) + "b ago" : recent_bear_s ? "Bear " + str.tostring(_bs_bear_sw) + "b ago" : "None"
     table.cell(tbl, 0, 10, "Liq Sweep",   bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
     table.cell(tbl, 1, 10, sweep_val,     bgcolor=any_sweep ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
 

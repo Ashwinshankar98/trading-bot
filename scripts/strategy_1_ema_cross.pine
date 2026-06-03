@@ -214,27 +214,20 @@ plotshape(bear_sweep, "Bear Sweep", shape.triangledown, location.abovebar,
 
 // Signal labels — show what confluence triggered the entry
 if buy_signal
-    detail = "▲ BUY\n"
-    detail += smc_bull and recent_bull_fvg ? "📦 FVG " : ""
-    detail += smc_bull and recent_bull_s   ? "💧 SWEEP " : ""
-    detail += "RVOL " + str.tostring(rvol, "#.#") + "x"
-    label.new(bar_index, low,  detail,
-        style=label.style_label_up, yloc=yloc.belowbar,
-        color=color.new(color.green, 5), textcolor=color.white, size=size.normal)
+    _fvg   = smc_bull and recent_bull_fvg ? "[FVG] " : ""
+    _sw    = smc_bull and recent_bull_s   ? "[SWEEP] " : ""
+    _dtl   = "BUY  " + _fvg + _sw + "RVOL " + str.tostring(rvol, "#.#") + "x"
+    label.new(bar_index, low, _dtl, style=label.style_label_up, yloc=yloc.belowbar, color=color.new(color.green, 5), textcolor=color.white, size=size.normal)
 
 if sell_signal
-    detail = "▼ SELL\n"
-    detail += smc_bear and recent_bear_fvg ? "📦 FVG " : ""
-    detail += smc_bear and recent_bear_s   ? "💧 SWEEP " : ""
-    detail += "RVOL " + str.tostring(rvol, "#.#") + "x"
-    label.new(bar_index, high, detail,
-        style=label.style_label_down, yloc=yloc.abovebar,
-        color=color.new(color.red, 5), textcolor=color.white, size=size.normal)
+    _fvg   = smc_bear and recent_bear_fvg ? "[FVG] " : ""
+    _sw    = smc_bear and recent_bear_s   ? "[SWEEP] " : ""
+    _dtl   = "SELL  " + _fvg + _sw + "RVOL " + str.tostring(rvol, "#.#") + "x"
+    label.new(bar_index, high, _dtl, style=label.style_label_down, yloc=yloc.abovebar, color=color.new(color.red, 5), textcolor=color.white, size=size.normal)
 
 if close_signal
-    reason = hit_sl ? "SL HIT" : hit_tp ? "TP HIT" : "EOD"
-    label.new(bar_index, close, "✖ EXIT\n" + reason,
-        style=label.style_label_down, color=color.new(color.gray, 20), textcolor=color.white, size=size.small)
+    _reason = hit_sl ? "SL HIT" : hit_tp ? "TP HIT" : "EOD"
+    label.new(bar_index, close, "EXIT - " + _reason, style=label.style_label_down, color=color.new(color.gray, 20), textcolor=color.white, size=size.small)
 
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  STATUS TABLE  (top-right, real-time factor dashboard)       ║
@@ -290,22 +283,21 @@ if show_tbl
 
     // Bullish FVG
     bs_bull_fvg = ta.barssince(fvg_bull)
+    bull_fvg_txt = recent_bull_fvg ? str.tostring(bs_bull_fvg) + " bars ago" : "None"
     table.cell(tbl, 0, 8, "Bull FVG",      bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
-    table.cell(tbl, 1, 8, recent_bull_fvg ? str.tostring(bs_bull_fvg) + " bars ago" : "None",
-        bgcolor = recent_bull_fvg ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+    table.cell(tbl, 1, 8, bull_fvg_txt, bgcolor=recent_bull_fvg ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
 
     // Bearish FVG
     bs_bear_fvg = ta.barssince(fvg_bear)
+    bear_fvg_txt = recent_bear_fvg ? str.tostring(bs_bear_fvg) + " bars ago" : "None"
     table.cell(tbl, 0, 9, "Bear FVG",      bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
-    table.cell(tbl, 1, 9, recent_bear_fvg ? str.tostring(bs_bear_fvg) + " bars ago" : "None",
-        bgcolor = recent_bear_fvg ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+    table.cell(tbl, 1, 9, bear_fvg_txt, bgcolor=recent_bear_fvg ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
 
     // Sweep
     table.cell(tbl, 0, 10, "Liq Sweep",    bgcolor=C_NEUT, text_color=C_TXT, text_size=SZ, text_halign=text.align_left)
     any_sweep = recent_bull_s or recent_bear_s
-    sweep_txt = recent_bull_s ? "Bull " : "" + recent_bear_s ? "Bear" : ""
-    table.cell(tbl, 1, 10, any_sweep ? sweep_txt + " ✓" : "None",
-        bgcolor=any_sweep ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
+    sweep_txt = recent_bull_s and recent_bear_s ? "Bull+Bear" : recent_bull_s ? "Bull" : recent_bear_s ? "Bear" : "None"
+    table.cell(tbl, 1, 10, sweep_txt, bgcolor=any_sweep ? C_PASS : C_FAIL, text_color=C_TXT, text_size=SZ, text_halign=text.align_center)
 
     // Divider
     table.cell(tbl, 0, 11, "──────────────", bgcolor=C_HDR, text_color=color.new(color.gray,30), text_size=SZ, text_halign=text.align_left)
