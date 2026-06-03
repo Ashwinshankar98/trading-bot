@@ -1,4 +1,4 @@
-//@version=5
+//@version=6
 indicator("EMA Cross + FVG + Sweep  [SPY Only]",
      overlay          = true,
      max_boxes_count  = 50,
@@ -32,12 +32,8 @@ show_tbl  = input.bool(true, "Show Status Table",group=G4)
 // ╚══════════════════════════════════════════════════════════════╝
 is_spy = syminfo.ticker == "SPY"
 if barstate.islast and not is_spy
-    label.new(bar_index, high,
-        "⚠️  This strategy is designed for SPY only.\nCurrent chart: " + syminfo.ticker,
-        style    = label.style_label_down,
-        color    = color.new(color.red, 10),
-        textcolor= color.white,
-        size     = size.normal)
+    _msg = "This strategy is designed for SPY only. Current chart: " + syminfo.ticker
+    label.new(bar_index, high, _msg, style=label.style_label_down, color=color.new(color.red, 10), textcolor=color.white, size=size.normal)
 
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  CORE INDICATORS                                             ║
