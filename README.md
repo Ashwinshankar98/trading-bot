@@ -103,7 +103,151 @@ Rejected signals look the same but end with `🔴 REJECTED — reason`.
 
 ## TradingView Pine Scripts
 
-Three strategies live in `scripts/`. All are **SPY-only** — an on-chart warning label appears if you load them on any other ticker.
+Three strategies live in `scripts/`. All are **SPY-only** — a warning label appears on-chart if you load them on any other ticker.
+
+---
+
+## TradingView Chart Visual Guide
+
+This section explains every visual element you see when all three strategies are loaded on a SPY 5m chart.
+
+---
+
+### Lines on the Chart
+
+| Line | Color | What it means |
+|------|-------|---------------|
+| **EMA 9** | Blue (thin) | Fast EMA — used in Strategy 1 (EMA Cross). When it crosses above EMA 21 = bullish momentum. |
+| **EMA 21** | Orange (thick) | The key dynamic support/resistance level. Strategy 3 (Pullback) uses bounces off this line as entries. |
+| **EMA 50** | Blue (thick) | Trend filter for Strategy 3. Price above = uptrend, price below = downtrend. |
+| **EMA 200** | Gray (thin) | Long-term macro trend. All strategies use this for regime background coloring. |
+| **VWAP** | Purple (thick) | Volume-Weighted Average Price — the fair value for the day. Entries require price to be on the correct side. |
+| **ORB High** | Green dashed | Opening Range high (first 15 min). Strategy 2 only — a crossover above fires a buy signal. |
+| **ORB Low** | Red dashed | Opening Range low (first 15 min). Strategy 2 only — a crossunder below fires a sell signal. |
+| **SL line** | Red dotted | Active stop-loss level. Disappears when no position is open. |
+| **TP line** | Green dotted | Active take-profit target. Disappears when no position is open. |
+
+---
+
+### Background Color (Chart Tint)
+
+| Color | Meaning |
+|-------|---------|
+| Faint **green** tint | Uptrend / Bull regime (price above EMA 50 or EMA 200 depending on strategy) |
+| Faint **red** tint | Downtrend / Bear regime |
+| No tint | Ranging / neutral market |
+
+This is just context — it does not fire any signal on its own.
+
+---
+
+### Shaded Boxes (Fair Value Gaps)
+
+Fair Value Gaps (FVGs) are price imbalances where the market moved too fast and left an unfilled gap between candles. Institutions often return to fill these — making them high-probability entry zones.
+
+| Box color | Meaning |
+|-----------|---------|
+| **Green box** | Bullish FVG — a gap below current price. Acts as support. A long entry near here has extra confluence. |
+| **Red box** | Bearish FVG — a gap above current price. Acts as resistance. A short entry near here has extra confluence. |
+| **Faded box** | Price has entered the zone (partially mitigated). Still relevant but weaker. |
+
+Up to 5 boxes per direction are shown at a time. Boxes extend 20 bars to the right so you can see them clearly.
+
+**How to read them:** When a buy signal fires and a green FVG box is nearby, the label will say `[FVG]` — meaning price is bouncing off institutional support. That's a stronger setup than a signal with no FVG.
+
+---
+
+### Triangle Markers (Liquidity Sweeps)
+
+A liquidity sweep is when price briefly spikes beyond a swing high or low (hunting stops), then immediately snaps back. Smart money does this to fill orders before reversing. After a sweep, a strong move in the opposite direction often follows.
+
+| Marker | Color | Meaning |
+|--------|-------|---------|
+| **Triangle UP** below bar | Aqua, labeled `SWEEP↑` | A bullish sweep — price wicked below a recent swing low and closed back above it. Expect upside. |
+| **Triangle DOWN** above bar | Orange, labeled `SWEEP↓` | A bearish sweep — price wicked above a recent swing high and closed back below it. Expect downside. |
+
+**How to read them:** If you see a `SWEEP↑` triangle just before a buy signal, the label will say `[SWEEP]`. This is the highest-quality entry — smart money already hunted the stops, the trap is set.
+
+---
+
+### Signal Labels
+
+Labels appear directly on the chart at the exact bar where a signal fired.
+
+| Label text | Color | Meaning |
+|-----------|-------|---------|
+| `BUY [FVG] RVOL 1.8x` | Green | Long entry signal. `[FVG]` = a Fair Value Gap confirmed it. RVOL shows how much above-average the volume was. |
+| `BUY [SWEEP] RVOL 2.1x` | Green | Long entry confirmed by a prior liquidity sweep. |
+| `BUY [FVG] [SWEEP] RVOL 3.0x` | Green | Both FVG and sweep confirmed — strongest setup. |
+| `ORB BUY [FVG] RVOL 1.6x` | Green | Strategy 2: price broke above the Opening Range High with FVG confluence. |
+| `PB BUY [IN FVG] RVOL 1.9x` | Green | Strategy 3: price pulled back to EMA 21 and is sitting inside a bullish FVG — prime entry zone. |
+| `SELL ...` | Red | Short entry signal — same confluence tags apply. |
+| `EXIT - SL HIT` | Gray | Position closed because price hit the stop loss. |
+| `EXIT - TP HIT` | Gray | Position closed because price hit the take-profit target. |
+| `EXIT - EOD` | Gray | Position closed at end of day (after 3:45 PM) regardless of P&L. |
+
+---
+
+### Status Table (Top-Right Corner)
+
+The table updates in real time on every bar. It shows the current value of every factor the strategy checks. **Teal = passing, Maroon = failing.**
+
+#### Strategy 1 — EMA Cross
+
+| Row | What it shows | Pass condition |
+|-----|--------------|----------------|
+| Ticker | Current chart symbol | Must be SPY |
+| RVOL | Relative Volume (current vol ÷ 20-bar avg) | ≥ 1.5× |
+| RSI (14) | Momentum oscillator | 40–70 for longs |
+| MACD Hist | MACD histogram direction | Positive (bullish) or negative (bearish) |
+| EMA 9 vs 21 | Fast vs slow EMA relationship | Fast > Slow for longs |
+| vs VWAP | Price relative to daily VWAP | Above for longs |
+| ADX | Trend strength (0–100) | > 20 (market is trending) |
+| Bull FVG | Bars since last bullish FVG formed | Within last 15 bars |
+| Bear FVG | Bars since last bearish FVG formed | Within last 15 bars |
+| Liq Sweep | Most recent sweep direction | Bull or Bear sweep within 5 bars |
+| **SIGNAL** | Current signal state | BUY / SELL / WAITING |
+| **Regime** | Macro trend based on EMA 200 + ADX | BULL TREND / BEAR TREND / RANGING |
+
+#### Strategy 2 — ORB
+
+Same table structure, with these ORB-specific rows replacing some:
+
+| Row | What it shows | Pass condition |
+|-----|--------------|----------------|
+| ORB Set | Whether the 9:30–9:45 range is locked | Shows High / Low prices once set |
+| ORB Range | Size of the Opening Range in dollars | Informational |
+| Price Zone | Where price is relative to the range | Above ORB / Inside Range / Below ORB |
+| Liq Sweep | General sweep + ORB-specific sweep | "ORB Low Swept" = best bull setup |
+
+#### Strategy 3 — EMA 21 Pullback
+
+| Row | What it shows | Pass condition |
+|-----|--------------|----------------|
+| Trend | Price vs EMA 50 | Uptrend for longs |
+| EMA21 Slope | Is EMA 21 rising or falling | Rising for longs |
+| PB Bounce | Did price touch and bounce off EMA 21 | "Bounced above EMA21" |
+| RSI (14) | Must be in pullback zone, not overextended | 40–65 for longs |
+| RVOL | Relative Volume | ≥ 1.5× |
+| vs VWAP | Price relative to VWAP | Above for longs |
+| In FVG Zone | Is price currently sitting inside a FVG | "In Bull FVG" = prime entry |
+| Recent FVG | Bars since last FVG formed | Within last 15 bars |
+| Liq Sweep | Was there a sweep before the bounce | Within last 5 bars |
+| **SIGNAL** | Current signal state | PB BUY / PB SELL / WAITING |
+| **Macro** | Price vs EMA 200 | BULL / BEAR |
+
+---
+
+### How to Read the Chart at a Glance
+
+1. **Check the background** — green tint means the trend is with you for longs, red for shorts
+2. **Check the status table** — count how many rows are teal. More teal = stronger setup
+3. **Look for FVG boxes** — a green box near current price is support for a long
+4. **Look for SWEEP triangles** — a recent `SWEEP↑` before a long signal = highest quality entry
+5. **Read the signal label** — it tells you exactly what confluence fired (`[FVG]`, `[SWEEP]`, RVOL)
+6. **Watch the SL/TP lines** — once a position is open, the red line is your stop, green is your target
+
+---
 
 ### Strategy 1 — EMA Cross + FVG + Sweep (`strategy_1_ema_cross.pine`)
 Triggers when EMA 9 crosses EMA 21 with VWAP, RSI, MACD, ADX, RVOL, and SMC confluence all aligned.
@@ -113,18 +257,6 @@ Captures the Opening Range Breakout (first 15 minutes, 9:30–9:45). Fires when 
 
 ### Strategy 3 — EMA 21 Pullback + FVG + Sweep (`strategy_3_ema_pullback.pine`)
 Triggers when price pulls back to EMA 21 in the direction of EMA 50 trend and bounces, confirmed by RSI, RVOL, and a nearby FVG or prior liquidity sweep.
-
-### Visual Features (all 3 scripts)
-
-| Feature | What you see |
-|---------|-------------|
-| FVG zones | Green/red shaded boxes for bullish/bearish Fair Value Gaps. Last 5 per direction. Box fades when price enters the zone (partially mitigated). |
-| Sweep markers | Aqua `SWEEP↑` triangle below bar / orange `SWEEP↓` triangle above bar when a liquidity sweep occurs |
-| Signal labels | Every entry shows `▲ BUY` or `▼ SELL` with which confluence fired: `📦 FVG`, `💧 SWEEP`, and RVOL value |
-| Exit labels | `✖ EXIT` with reason: `SL HIT`, `TP HIT`, or `EOD` |
-| Status table | Top-right corner — all factors live with teal (✓) / maroon (✗) color coding |
-| Regime background | Subtle green tint = uptrend, red tint = downtrend |
-| SL / TP lines | Dashed lines on chart tracking the active position's stop and target |
 
 ---
 
