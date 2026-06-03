@@ -1,0 +1,158 @@
+//@version=5
+indicator(title="Strategy 3 - EMA 21 Pullback + FVG + Sweep", overlay=true)
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════
+rvol_min  = input.float(1.5, title="Min Relative Volume (RVOL)")
+swing_len = input.int(5,     title="Swing Pivot Lookback (Sweep)")
+
+// ═══════════════════════════════════════════════════════════════
+// INDICATORS
+// ═══════════════════════════════════════════════════════════════
+ema21   = ta.ema(close, 21)
+ema50   = ta.ema(close, 50)
+rsi_val = ta.rsi(close, 14)
+atr_val = ta.atr(14)
+
+// ═══════════════════════════════════════════════════════════════
+// MARKET HOURS
+// ═══════════════════════════════════════════════════════════════
+in_hours = not na(time("5", "0930-1545:23456"))
+eod_time = not na(time("5", "1545-1600:23456"))
+
+// ═══════════════════════════════════════════════════════════════
+// TREND
+// ═══════════════════════════════════════════════════════════════
+uptrend   = close > ema50
+downtrend = close < ema50
+
+// ═══════════════════════════════════════════════════════════════
+// RELATIVE VOLUME (RVOL)
+// ═══════════════════════════════════════════════════════════════
+vol_avg   = ta.sma(volume, 20)
+rvol      = volume / vol_avg
+high_rvol = rvol >= rvol_min
+
+// ═══════════════════════════════════════════════════════════════
+// FAIR VALUE GAP (FVG)
+// Key insight for EMA Pullback: the strongest pullback entries happen when
+// price pulls back to EMA21 AND that level coincides with a bullish FVG.
+// Double confluence = institutional support at that exact price.
+// ═══════════════════════════════════════════════════════════════
+fvg_bull_formed = low > high[2]
+fvg_bear_formed = high < low[2]
+
+bull_fvg_bottom = ta.valuewhen(fvg_bull_formed, high[2], 0)
+bull_fvg_top    = ta.valuewhen(fvg_bull_formed, low,     0)
+bear_fvg_bottom = ta.valuewhen(fvg_bear_formed, high,    0)
+bear_fvg_top    = ta.valuewhen(fvg_bear_formed, low[2],  0)
+
+// Price is currently within a bullish/bearish FVG zone
+price_in_bull_fvg = not na(bull_fvg_bottom) and close >= bull_fvg_bottom and close <= bull_fvg_top
+price_in_bear_fvg = not na(bear_fvg_bottom) and close >= bear_fvg_bottom and close <= bear_fvg_top
+
+recent_bull_fvg = ta.barssince(fvg_bull_formed) <= 15
+recent_bear_fvg = ta.barssince(fvg_bear_formed) <= 15
+
+// ═══════════════════════════════════════════════════════════════
+// LIQUIDITY SWEEP
+// Key insight for EMA Pullback: the cleanest bounce off EMA21 happens AFTER
+// a liquidity sweep below the EMA (stop hunt). Smart money hunts stops below
+// the moving average, then price snaps back — that snap IS the long entry.
+// ═══════════════════════════════════════════════════════════════
+swing_high = ta.pivothigh(high, swing_len, 1)
+swing_low  = ta.pivotlow(low,  swing_len, 1)
+
+last_swing_high = ta.valuewhen(not na(swing_high), swing_high, 0)
+last_swing_low  = ta.valuewhen(not na(swing_low),  swing_low,  0)
+
+bull_sweep = not na(last_swing_low)  and low < last_swing_low  and close > last_swing_low
+bear_sweep = not na(last_swing_high) and high > last_swing_high and close < last_swing_high
+
+// Recent sweep: last 5 bars (the stop hunt just happened, entry follows)
+recent_bull_sweep = ta.barssince(bull_sweep) <= 5
+recent_bear_sweep = ta.barssince(bear_sweep) <= 5
+
+// ═══════════════════════════════════════════════════════════════
+// ENTRY SIGNALS
+// Original: bounce off EMA21 in trend direction with RSI filter
+// NEW: require SMC confluence — either price is IN a FVG or a sweep just happened
+// This makes entries rare but eliminates the random EMA touches that failed
+// ═══════════════════════════════════════════════════════════════
+bounced_above  = close > ema21 and close[1] <= ema21 * 1.002
+rejected_below = close < ema21 and close[1] >= ema21 * 0.998
+
+rsi_bull_pb = rsi_val > 40 and rsi_val < 65
+rsi_bear_pb = rsi_val < 60 and rsi_val > 35
+
+// SMC confluence: FVG or sweep must confirm the bounce
+smc_bull = price_in_bull_fvg or recent_bull_fvg or recent_bull_sweep
+smc_bear = price_in_bear_fvg or recent_bear_fvg or recent_bear_sweep
+
+buy_signal  = in_hours and uptrend   and bounced_above  and rsi_bull_pb and ta.rising(ema21,  3) and high_rvol and smc_bull
+sell_signal = in_hours and downtrend and rejected_below and rsi_bear_pb and ta.falling(ema21, 3) and high_rvol and smc_bear
+
+// ═══════════════════════════════════════════════════════════════
+// POSITION TRACKING & SL/TP
+// SL = 1× ATR beyond EMA21, TP = 2× risk
+// ═══════════════════════════════════════════════════════════════
+var float entry_price = na
+var int   position    = 0
+
+if buy_signal and position == 0
+    entry_price := close
+    position    := 1
+
+if sell_signal and position == 0
+    entry_price := close
+    position    := -1
+
+sl_price = position == 1  ? entry_price - atr_val * 1.0 :
+           position == -1 ? entry_price + atr_val * 1.0 : na
+tp_price = position == 1  ? entry_price + atr_val * 2.0 :
+           position == -1 ? entry_price - atr_val * 2.0 : na
+
+hit_sl = (position == 1  and low  <= sl_price) or (position == -1 and high >= sl_price)
+hit_tp = (position == 1  and high >= tp_price) or (position == -1 and low  <= tp_price)
+
+close_signal = position != 0 and (hit_sl or hit_tp or eod_time)
+
+if close_signal
+    position    := 0
+    entry_price := na
+
+// ═══════════════════════════════════════════════════════════════
+// PLOTS
+// ═══════════════════════════════════════════════════════════════
+plot(ema21, title="EMA 21", color=color.orange, linewidth=2)
+plot(ema50, title="EMA 50", color=color.blue,   linewidth=2)
+
+plot(bull_fvg_bottom, title="Bull FVG Bot", color=color.new(color.green, 70), linewidth=1, style=plot.style_linebr)
+plot(bull_fvg_top,    title="Bull FVG Top", color=color.new(color.green, 70), linewidth=1, style=plot.style_linebr)
+plot(bear_fvg_bottom, title="Bear FVG Bot", color=color.new(color.red, 70),   linewidth=1, style=plot.style_linebr)
+plot(bear_fvg_top,    title="Bear FVG Top", color=color.new(color.red, 70),   linewidth=1, style=plot.style_linebr)
+
+plot(sl_price, title="SL", color=color.red,   linewidth=1, style=plot.style_linebr)
+plot(tp_price, title="TP", color=color.green, linewidth=1, style=plot.style_linebr)
+
+plotshape(buy_signal,   style=shape.labelup,   location=location.belowbar, color=color.green, text="PB UP",   textcolor=color.white)
+plotshape(sell_signal,  style=shape.labeldown, location=location.abovebar, color=color.red,   text="PB DOWN", textcolor=color.white)
+plotshape(close_signal, style=shape.xcross,    location=location.abovebar, color=color.white, text="EXIT",    textcolor=color.white, size=size.small)
+
+// Sweep markers — helps you visually confirm the stop hunt before entry
+plotshape(bull_sweep, title="Bull Sweep", style=shape.triangleup,   location=location.belowbar, color=color.new(color.aqua, 30),   size=size.small, text="SWEEP↑")
+plotshape(bear_sweep, title="Bear Sweep", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 30), size=size.small, text="SWEEP↓")
+
+bgcolor(uptrend   ? color.new(color.green, 97) : na)
+bgcolor(downtrend ? color.new(color.red,   97) : na)
+
+// ═══════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════
+if buy_signal
+    alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"ema_pullback","signal":"buy"}',   alert.freq_once_per_bar_close)
+if sell_signal
+    alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"ema_pullback","signal":"sell"}',  alert.freq_once_per_bar_close)
+if close_signal
+    alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"ema_pullback","signal":"close"}', alert.freq_once_per_bar_close)

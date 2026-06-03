@@ -1,7 +1,7 @@
 import os, json, asyncio
 import httpx
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
-from core.indicators import get_all_indicators
+from core.indicators import get_all_indicators, multi_factor_score
 from core.regime import detect_regime
 from core.paper_trader import (
     get_strategy_account, get_active_strategy, open_trade, close_trade,
@@ -136,10 +136,23 @@ async def _process_signal_inner(symbol: str, signal: str, price: float, strategy
     indicators = await asyncio.to_thread(get_all_indicators, symbol)
     print(f"[SIGNAL] Indicators: {indicators}", flush=True)
 
-    regime   = await asyncio.to_thread(detect_regime, symbol)
-    account  = get_strategy_account(strategy_id)
-    strategy = get_active_strategy()
-    print(f"[SIGNAL] Regime: {regime}", flush=True)
+    regime_data = await asyncio.to_thread(detect_regime, symbol)
+    account     = get_strategy_account(strategy_id)
+    strategy    = get_active_strategy()
+    print(f"[SIGNAL] Regime: {regime_data}", flush=True)
+
+    # ── VIX gate — skip if panic regime (slide 4) ────────────────────────────
+    vix = regime_data.get("vix") or 0
+    if vix > 30:
+        print(f"[SIGNAL] Skipping — VIX={vix} too high (panic regime)", flush=True)
+        return
+
+    # ── Multi-factor gate (5 factors: momentum/trend/VWAP/ADX/FVG-sweep) ─────
+    factor = multi_factor_score(indicators, signal)
+    print(f"[SIGNAL] Multi-factor score: {factor['score']}/5 — {factor['factors']}", flush=True)
+    if factor["score"] < 3:
+        print(f"[SIGNAL] Skipping — only {factor['score']}/5 factors aligned (need ≥3)", flush=True)
+        return
 
     # ── Fetch options candidates ──────────────────────────────────────────────
     print(f"[SIGNAL] Fetching options candidates for {symbol} signal={signal}", flush=True)
@@ -150,12 +163,17 @@ async def _process_signal_inner(symbol: str, signal: str, price: float, strategy
         print("[SIGNAL] No liquid options available — skipping", flush=True)
         return
 
-    # ── Claude decides ────────────────────────────────────────────────────────
-    decision = await asyncio.to_thread(decide_options_trade, symbol, signal, indicators, regime, account, strategy, candidates)
-    print(f"[SIGNAL] Decision: action={decision['action']} confidence={decision['confidence']:.2f} contract={decision.get('chosen_contract')}", flush=True)
+    # ── Claude decides (hedge fund quant mode) ────────────────────────────────
+    decision = await asyncio.to_thread(
+        decide_options_trade, symbol, signal, indicators,
+        regime_data, account, strategy, candidates, factor
+    )
+    print(f"[SIGNAL] Decision: action={decision['action']} confidence={decision['confidence']:.2f} "
+          f"rr={decision.get('rr_ratio','?')} contract={decision.get('chosen_contract')}", flush=True)
     print(f"[SIGNAL] Reasoning: {decision.get('reasoning', '')[:150]}", flush=True)
 
-    threshold = strategy.get("entry_threshold", 0.60)
+    # Minimum confidence 0.70 regardless of strategy setting (slide 1/3)
+    threshold = max(strategy.get("entry_threshold", 0.60), 0.70)
     if decision["action"] != "open" or decision["confidence"] < threshold:
         print(f"[SIGNAL] Skipped — confidence={decision['confidence']:.2f} threshold={threshold:.2f}", flush=True)
         return
@@ -172,9 +190,10 @@ async def _process_signal_inner(symbol: str, signal: str, price: float, strategy
         return
 
     # ── Record in DB ──────────────────────────────────────────────────────────
-    side     = "long"   # always buying options (calls for buy, puts for sell)
+    side       = "long"   # always buying options (calls for buy, puts for sell)
+    regime_str = regime_data.get("regime", "ranging") if isinstance(regime_data, dict) else str(regime_data)
     trade_id, msg = open_option_trade(
-        symbol, side, price, candidate, decision, regime, strategy_id, alpaca_result
+        symbol, side, price, candidate, decision, regime_str, strategy_id, alpaca_result
     )
     print(f"[SIGNAL] open_option_trade: trade_id={trade_id} msg={msg}", flush=True)
 
@@ -187,9 +206,10 @@ async def _process_signal_inner(symbol: str, signal: str, price: float, strategy
         f"Strategy: {STRATEGY_NAMES.get(strategy_id, strategy_id)}\n"
         f"Contract: {candidate['symbol']}\n"
         f"Strike: ${candidate['strike']} | {candidate['moneyness']} | {candidate['option_type'].upper()}\n"
-        f"Premium: ${alpaca_result['fill_price']:.2f} x {contracts} contracts = ${alpaca_result['fill_price']*100*contracts:.0f}\n"
+        f"Premium: ${alpaca_result['fill_price']:.2f} x {contracts} = ${alpaca_result['fill_price']*100*contracts:.0f}\n"
         f"IV: {candidate['iv']*100:.1f}% | Delta: {g['delta']} | Theta: ${g['theta']:.3f}/day\n"
-        f"Regime: {regime} | Confidence: {decision['confidence']:.0%}\n"
+        f"Regime: {regime_str} | Trend: {regime_data.get('trend','?')} | VIX: {regime_data.get('vix','?')}\n"
+        f"Factors: {factor['score']}/4 | R:R: {decision.get('rr_ratio','3')}:1 | Confidence: {decision['confidence']:.0%}\n"
         f"Reason: {decision.get('reasoning', '')[:120]}"
     )
 

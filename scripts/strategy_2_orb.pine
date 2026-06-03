@@ -1,0 +1,151 @@
+//@version=5
+indicator(title="Strategy 2 - ORB + FVG + Sweep", overlay=true)
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════
+rvol_min  = input.float(1.5, title="Min Relative Volume (RVOL)")
+swing_len = input.int(5,     title="Swing Pivot Lookback (Sweep)")
+
+// ═══════════════════════════════════════════════════════════════
+// TIME WINDOWS
+// ═══════════════════════════════════════════════════════════════
+is_opening = not na(time("5", "0930-0945:23456"))
+in_hours   = not na(time("5", "0945-1545:23456"))
+eod_time   = not na(time("5", "1545-1600:23456"))
+
+// ═══════════════════════════════════════════════════════════════
+// OPENING RANGE
+// ═══════════════════════════════════════════════════════════════
+var float orb_high = na
+var float orb_low  = na
+var bool  orb_set  = false
+
+if ta.change(time("D")) != 0
+    orb_high := na
+    orb_low  := na
+    orb_set  := false
+
+if is_opening
+    orb_high := na(orb_high) ? high : math.max(orb_high, high)
+    orb_low  := na(orb_low)  ? low  : math.min(orb_low,  low)
+
+if in_hours and not orb_set and not na(orb_high)
+    orb_set := true
+
+// ═══════════════════════════════════════════════════════════════
+// RELATIVE VOLUME (RVOL)
+// ═══════════════════════════════════════════════════════════════
+vol_avg  = ta.sma(volume, 20)
+rvol     = volume / vol_avg
+high_rvol = rvol >= rvol_min
+
+// ═══════════════════════════════════════════════════════════════
+// FAIR VALUE GAP (FVG)
+// For ORB: a bullish FVG near/below the ORB high confirms the breakout has support
+// A bearish FVG near/above the ORB low confirms the breakdown has overhead resistance
+// ═══════════════════════════════════════════════════════════════
+fvg_bull_formed = low > high[2]
+fvg_bear_formed = high < low[2]
+
+bull_fvg_bottom = ta.valuewhen(fvg_bull_formed, high[2], 0)
+bull_fvg_top    = ta.valuewhen(fvg_bull_formed, low,     0)
+bear_fvg_bottom = ta.valuewhen(fvg_bear_formed, high,    0)
+bear_fvg_top    = ta.valuewhen(fvg_bear_formed, low[2],  0)
+
+recent_bull_fvg = ta.barssince(fvg_bull_formed) <= 20
+recent_bear_fvg = ta.barssince(fvg_bear_formed) <= 20
+
+// ═══════════════════════════════════════════════════════════════
+// LIQUIDITY SWEEP
+// The ideal ORB setup: price sweeps the OPPOSITE side of the range first
+// (inducement), THEN breaks the target side — this is smart money's fingerprint.
+//
+// Bullish ORB: price first swept the ORB low (stop hunt below), then broke above ORB high
+// Bearish ORB: price first swept the ORB high (stop hunt above), then broke below ORB low
+// ═══════════════════════════════════════════════════════════════
+swing_high = ta.pivothigh(high, swing_len, 1)
+swing_low  = ta.pivotlow(low,  swing_len, 1)
+
+last_swing_high = ta.valuewhen(not na(swing_high), swing_high, 0)
+last_swing_low  = ta.valuewhen(not na(swing_low),  swing_low,  0)
+
+bull_sweep = not na(last_swing_low)  and low < last_swing_low  and close > last_swing_low
+bear_sweep = not na(last_swing_high) and high > last_swing_high and close < last_swing_high
+
+recent_bull_sweep = ta.barssince(bull_sweep) <= 10
+recent_bear_sweep = ta.barssince(bear_sweep) <= 10
+
+// ORB-specific sweep: was the ORB low swept before the high broke? (best setup)
+orb_low_swept  = orb_set and not na(orb_low)  and ta.lowest(low,  20) < orb_low
+orb_high_swept = orb_set and not na(orb_high) and ta.highest(high, 20) > orb_high
+
+// ═══════════════════════════════════════════════════════════════
+// ENTRY SIGNALS
+// Standard ORB break + RVOL + SMC confluence (sweep or FVG)
+// ═══════════════════════════════════════════════════════════════
+smc_bull = recent_bull_fvg or recent_bull_sweep or orb_low_swept
+smc_bear = recent_bear_fvg or recent_bear_sweep or orb_high_swept
+
+buy_signal  = in_hours and orb_set and ta.crossover(close,  orb_high) and high_rvol and smc_bull
+sell_signal = in_hours and orb_set and ta.crossunder(close, orb_low)  and high_rvol and smc_bear
+
+// ═══════════════════════════════════════════════════════════════
+// POSITION TRACKING & SL/TP
+// SL = opposite side of ORB range, TP = 1× range extension
+// ═══════════════════════════════════════════════════════════════
+var float entry_price = na
+var int   position    = 0
+
+orb_range = na(orb_high) or na(orb_low) ? na : orb_high - orb_low
+
+if buy_signal and position == 0
+    entry_price := close
+    position    := 1
+
+if sell_signal and position == 0
+    entry_price := close
+    position    := -1
+
+sl_price = position == 1  ? orb_low  :
+           position == -1 ? orb_high : na
+tp_price = position == 1  ? orb_high + orb_range :
+           position == -1 ? orb_low  - orb_range : na
+
+hit_sl = (position == 1  and low  <= sl_price) or (position == -1 and high >= sl_price)
+hit_tp = (position == 1  and high >= tp_price) or (position == -1 and low  <= tp_price)
+
+close_signal = position != 0 and (hit_sl or hit_tp or eod_time)
+
+if close_signal
+    position    := 0
+    entry_price := na
+
+// ═══════════════════════════════════════════════════════════════
+// PLOTS
+// ═══════════════════════════════════════════════════════════════
+plot(orb_high,      title="ORB High",      color=color.green, linewidth=2, style=plot.style_linebr)
+plot(orb_low,       title="ORB Low",       color=color.red,   linewidth=2, style=plot.style_linebr)
+plot(bull_fvg_bottom, title="Bull FVG Bot", color=color.new(color.green, 70), linewidth=1, style=plot.style_linebr)
+plot(bull_fvg_top,    title="Bull FVG Top", color=color.new(color.green, 70), linewidth=1, style=plot.style_linebr)
+plot(bear_fvg_bottom, title="Bear FVG Bot", color=color.new(color.red, 70),   linewidth=1, style=plot.style_linebr)
+plot(bear_fvg_top,    title="Bear FVG Top", color=color.new(color.red, 70),   linewidth=1, style=plot.style_linebr)
+plot(sl_price, title="SL", color=color.red,   linewidth=1, style=plot.style_linebr)
+plot(tp_price, title="TP", color=color.green, linewidth=1, style=plot.style_linebr)
+
+plotshape(buy_signal,   style=shape.labelup,   location=location.belowbar, color=color.green, text="ORB UP",   textcolor=color.white)
+plotshape(sell_signal,  style=shape.labeldown, location=location.abovebar, color=color.red,   text="ORB DOWN", textcolor=color.white)
+plotshape(close_signal, style=shape.xcross,    location=location.abovebar, color=color.white, text="EXIT",     textcolor=color.white, size=size.small)
+
+plotshape(bull_sweep, title="Bull Sweep", style=shape.triangleup,   location=location.belowbar, color=color.new(color.aqua, 30),   size=size.small, text="SWEEP↑")
+plotshape(bear_sweep, title="Bear Sweep", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 30), size=size.small, text="SWEEP↓")
+
+// ═══════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════
+if buy_signal
+    alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"orb","signal":"buy"}',   alert.freq_once_per_bar_close)
+if sell_signal
+    alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"orb","signal":"sell"}',  alert.freq_once_per_bar_close)
+if close_signal
+    alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"orb","signal":"close"}', alert.freq_once_per_bar_close)

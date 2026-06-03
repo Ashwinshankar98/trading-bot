@@ -86,42 +86,47 @@ def _get_current_rules() -> dict:
 
 
 def _ask_claude_for_improvements(all_stats: list, current_rules: dict) -> dict:
-    """Feed performance data to Claude and get updated strategy rules."""
-    prompt = f"""You are a quantitative trading analyst reviewing a paper trading bot's weekly performance.
+    """Feed performance data to Claude and get updated strategy rules (slide 6)."""
+    prompt = f"""You are a hedge fund quantitative analyst reviewing a paper trading bot's weekly performance.
+Your mandate: increase Sharpe ratio and reduce drawdown.
 
-Your job: analyze performance across 3 strategies and suggest parameter improvements to the shared strategy rules.
-
-CURRENT ACTIVE RULES (version {current_rules.get('version', 1)}):
+CURRENT ACTIVE RULES v{current_rules.get('version', 1)} (BEFORE):
 {json.dumps(current_rules.get('rules', {}), indent=2)}
 
 WEEKLY PERFORMANCE BY STRATEGY:
 {json.dumps(all_stats, indent=2)}
 
-PARAMETERS YOU CAN ADJUST:
-- entry_threshold (0.50–0.80): how selective Claude is. Raise if too many losses, lower if missing good trades.
-- position_size_pct (0.05–0.20): position sizing as % of account balance.
-- stop_loss_pct (0.01–0.05): stop loss distance as % of entry price.
-- take_profit_pct (0.02–0.08): take profit distance as % of entry price.
-- indicator weights (rsi, macd, ema_cross, vwap, bollinger): must sum to 1.0.
-- regime_filters: which indicators to use in trending/ranging/volatile markets.
+OPTIMIZATION GOALS (slide 6):
+1. Increase Sharpe ratio: raise entry_threshold if win_rate < 40%, lower position_size if avg_loss is large.
+2. Reduce drawdown: tighten stop_loss_pct if losses are frequent and large.
+3. Improve filters: regime_filters should block strategies when conditions are wrong.
 
-RULES FOR YOUR RESPONSE:
-1. Only suggest changes supported by the data. If sample size < {MIN_TRADES_TO_IMPROVE} for a strategy, note it but don't over-optimize.
-2. Be conservative — small adjustments (±0.05 on thresholds, ±0.01 on pcts).
-3. If win rate > 60% and avg_winner > abs(avg_loser), the strategy is working — don't over-tune.
-4. If win rate < 40%, raise entry_threshold first before touching other params.
+ADJUSTABLE PARAMETERS:
+- entry_threshold (0.50–0.80): selectivity. Minimum is 0.70 — never lower below that.
+- position_size_pct (0.05–0.20): capital per trade.
+- stop_loss_pct (0.01–0.05): stop distance.
+- take_profit_pct (0.02–0.08): profit target.
+- max_open_trades (1–5): concurrent positions.
+- regime_filters: strategies allowed per regime.
 
-Respond ONLY with valid JSON (no markdown, no text outside JSON):
+RULES:
+1. Only adjust based on data. Sample size < {MIN_TRADES_TO_IMPROVE} → note it, don't over-tune.
+2. Small adjustments only (±0.05 thresholds, ±0.01 pcts).
+3. Win rate > 60% and avg_winner > |avg_loser| → strategy is working, don't change.
+4. Win rate < 40% → raise entry_threshold first. Then reduce position_size_pct.
+5. entry_threshold must never go below 0.70.
+
+Show BEFORE vs AFTER in the changes array (slide 6 output).
+
+Respond ONLY with valid JSON:
 {{
-  "updated_rules": {{ ... complete updated rules JSON ... }},
-  "rationale": "2-3 sentence summary of what changed and why",
+  "updated_rules": {{ ... complete updated rules ... }},
+  "rationale": "2-3 sentences: what changed, why, expected impact on Sharpe/drawdown",
   "changes": [
-    {{"parameter": "entry_threshold", "old": 0.60, "new": 0.65, "reason": "win rate below 40%"}}
+    {{"parameter": "entry_threshold", "before": 0.65, "after": 0.72, "reason": "win rate 14% — raising selectivity"}}
   ],
   "skip_reason": null
 }}
-
-If no changes are warranted, set "changes" to [] and explain in "rationale". Set "skip_reason" to a string if you're skipping due to insufficient data."""
 
     response = client.messages.create(
         model="claude-sonnet-4-6",

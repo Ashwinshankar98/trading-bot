@@ -1,22 +1,21 @@
 //@version=5
-indicator(title="Strategy 1 - EMA Cross VWAP RSI MACD Full", overlay=true)
+indicator(title="Strategy 1 - EMA Cross + FVG + Sweep", overlay=true)
 
 // ═══════════════════════════════════════════════════════════════
 // INPUTS
 // ═══════════════════════════════════════════════════════════════
-ema_fast_len  = input.int(9,  title="EMA Fast Length")
-ema_slow_len  = input.int(21, title="EMA Slow Length")
-rsi_len       = input.int(14, title="RSI Length")
-rsi_ob        = input.int(70, title="RSI Overbought")
-rsi_os        = input.int(30, title="RSI Oversold")
-adx_len       = input.int(14, title="ADX Length")
-adx_threshold = input.int(20, title="ADX Min Threshold (trend strength)")
-bb_len        = input.int(20, title="Bollinger Band Length")
-bb_mult       = input.float(2.0, title="Bollinger Band Std Dev")
-vol_mult      = input.float(1.2, title="Volume Spike Multiplier")
-atr_len       = input.int(14, title="ATR Length")
+ema_fast_len  = input.int(9,    title="EMA Fast Length")
+ema_slow_len  = input.int(21,   title="EMA Slow Length")
+rsi_len       = input.int(14,   title="RSI Length")
+rsi_ob        = input.int(70,   title="RSI Overbought")
+rsi_os        = input.int(30,   title="RSI Oversold")
+adx_len       = input.int(14,   title="ADX Length")
+adx_threshold = input.int(20,   title="ADX Min Threshold")
+atr_len       = input.int(14,   title="ATR Length")
 atr_sl_mult   = input.float(1.5, title="ATR Stop Loss Multiplier")
 atr_tp_mult   = input.float(3.0, title="ATR Take Profit Multiplier")
+rvol_min      = input.float(1.5, title="Min Relative Volume (RVOL)")
+swing_len     = input.int(5,    title="Swing Pivot Lookback (Sweep)")
 
 // ═══════════════════════════════════════════════════════════════
 // CORE INDICATORS
@@ -26,63 +25,106 @@ ema_slow = ta.ema(close, ema_slow_len)
 ema_200  = ta.ema(close, 200)
 vwap_val = ta.vwap(hlc3)
 rsi_val  = ta.rsi(close, rsi_len)
-
-macd_fast  = ta.ema(close, 12)
-macd_slow  = ta.ema(close, 26)
-macd_line  = macd_fast - macd_slow
-macd_sig   = ta.ema(macd_line, 9)
-macd_hist  = macd_line - macd_sig
+atr_val  = ta.atr(atr_len)
 
 [diplus, diminus, adx_val] = ta.dmi(adx_len, adx_len)
 
-bb_basis = ta.sma(close, bb_len)
-bb_dev   = ta.stdev(close, bb_len)
-bb_upper = bb_basis + bb_mult * bb_dev
-bb_lower = bb_basis - bb_mult * bb_dev
+macd_line = ta.ema(close, 12) - ta.ema(close, 26)
+macd_sig  = ta.ema(macd_line, 9)
+macd_hist = macd_line - macd_sig
 
-vol_avg   = ta.sma(volume, 20)
-vol_spike = volume > vol_avg * vol_mult
+// ═══════════════════════════════════════════════════════════════
+// RELATIVE VOLUME (RVOL)
+// Compares current bar volume to 20-bar average — smarter than raw volume spike
+// ═══════════════════════════════════════════════════════════════
+vol_avg  = ta.sma(volume, 20)
+rvol     = volume / vol_avg
+high_rvol = rvol >= rvol_min
 
-atr_val = ta.atr(atr_len)
+// ═══════════════════════════════════════════════════════════════
+// FAIR VALUE GAP (FVG) — ICT / SMC concept
+// Bullish FVG: current bar's low > 2-bars-ago high  → unmitigated gap below = support
+// Bearish FVG: current bar's high < 2-bars-ago low  → unmitigated gap above = resistance
+// ═══════════════════════════════════════════════════════════════
+fvg_bull_formed = low > high[2]
+fvg_bear_formed = high < low[2]
+
+// Zone boundaries of the most recent FVG
+bull_fvg_bottom = ta.valuewhen(fvg_bull_formed, high[2], 0)
+bull_fvg_top    = ta.valuewhen(fvg_bull_formed, low,     0)
+bear_fvg_bottom = ta.valuewhen(fvg_bear_formed, high,    0)
+bear_fvg_top    = ta.valuewhen(fvg_bear_formed, low[2],  0)
+
+// Recent FVG formed in last 15 bars
+recent_bull_fvg = ta.barssince(fvg_bull_formed) <= 15
+recent_bear_fvg = ta.barssince(fvg_bear_formed) <= 15
+
+// Price pulled back INTO a bullish FVG (premium entry on longs)
+price_in_bull_fvg = not na(bull_fvg_bottom) and close >= bull_fvg_bottom and close <= bull_fvg_top
+price_in_bear_fvg = not na(bear_fvg_bottom) and close >= bear_fvg_bottom and close <= bear_fvg_top
+
+// ═══════════════════════════════════════════════════════════════
+// LIQUIDITY SWEEP — ICT / SMC concept
+// Smart money hunts stops beyond swing highs/lows before reversing
+// Bullish sweep: wick below a swing low, closed above it → expect upside
+// Bearish sweep: wick above a swing high, closed below it → expect downside
+// ═══════════════════════════════════════════════════════════════
+swing_high = ta.pivothigh(high, swing_len, 1)
+swing_low  = ta.pivotlow(low,  swing_len, 1)
+
+last_swing_high = ta.valuewhen(not na(swing_high), swing_high, 0)
+last_swing_low  = ta.valuewhen(not na(swing_low),  swing_low,  0)
+
+bull_sweep = not na(last_swing_low)  and low < last_swing_low  and close > last_swing_low
+bear_sweep = not na(last_swing_high) and high > last_swing_high and close < last_swing_high
+
+// Recent sweep in last 5 bars
+recent_bull_sweep = ta.barssince(bull_sweep) <= 5
+recent_bear_sweep = ta.barssince(bear_sweep) <= 5
 
 // ═══════════════════════════════════════════════════════════════
 // REGIME
 // ═══════════════════════════════════════════════════════════════
 is_trending = adx_val > adx_threshold
-is_ranging  = adx_val <= adx_threshold
 bull_trend  = is_trending and close > ema_200
 bear_trend  = is_trending and close < ema_200
 
 // ═══════════════════════════════════════════════════════════════
 // MARKET HOURS
 // ═══════════════════════════════════════════════════════════════
-in_hours = not na(time("5", "0945-1545:23456"))
+in_hours = not na(time("5", "0930-1545:23456"))
 eod_time = not na(time("5", "1545-1600:23456"))
 
 // ═══════════════════════════════════════════════════════════════
 // ENTRY SIGNALS
+// EMA cross + all original filters + RVOL + (FVG OR sweep confluence)
 // ═══════════════════════════════════════════════════════════════
 ema_bull_cross = ta.crossover(ema_fast, ema_slow)
 above_vwap     = close > vwap_val
 rsi_bull       = rsi_val > 50 and rsi_val < rsi_ob
 macd_bull      = macd_hist > 0 and macd_hist > macd_hist[1]
-trend_ok_bull  = is_trending ? diplus > diminus : rsi_val > 50 and rsi_val < 60
+trend_ok_bull  = is_trending ? diplus > diminus : rsi_val > 50
 
-buy_signal = in_hours and ema_bull_cross and above_vwap and rsi_bull and macd_bull and trend_ok_bull and vol_spike
+// SMC confluence: at least one of FVG or sweep must confirm the direction
+smc_bull = recent_bull_fvg or recent_bull_sweep or price_in_bull_fvg
+
+buy_signal = in_hours and ema_bull_cross and above_vwap and rsi_bull and macd_bull and trend_ok_bull and high_rvol and smc_bull
 
 ema_bear_cross = ta.crossunder(ema_fast, ema_slow)
 below_vwap     = close < vwap_val
 rsi_bear       = rsi_val < 50 and rsi_val > rsi_os
 macd_bear      = macd_hist < 0 and macd_hist < macd_hist[1]
-trend_ok_bear  = is_trending ? diminus > diplus : rsi_val < 50 and rsi_val > 40
+trend_ok_bear  = is_trending ? diminus > diplus : rsi_val < 50
 
-sell_signal = in_hours and ema_bear_cross and below_vwap and rsi_bear and macd_bear and trend_ok_bear and vol_spike
+smc_bear = recent_bear_fvg or recent_bear_sweep or price_in_bear_fvg
+
+sell_signal = in_hours and ema_bear_cross and below_vwap and rsi_bear and macd_bear and trend_ok_bear and high_rvol and smc_bear
 
 // ═══════════════════════════════════════════════════════════════
 // POSITION TRACKING & SL/TP
 // ═══════════════════════════════════════════════════════════════
 var float entry_price = na
-var int   position    = 0  // 1=long, -1=short, 0=flat
+var int   position    = 0
 
 if buy_signal and position == 0
     entry_price := close
@@ -92,17 +134,13 @@ if sell_signal and position == 0
     entry_price := close
     position    := -1
 
-// Dynamic SL/TP anchored to entry
 sl_price = position == 1  ? entry_price - atr_val * atr_sl_mult :
            position == -1 ? entry_price + atr_val * atr_sl_mult : na
 tp_price = position == 1  ? entry_price + atr_val * atr_tp_mult :
            position == -1 ? entry_price - atr_val * atr_tp_mult : na
 
-// Close conditions
-hit_sl = position == 1  and low  <= sl_price or
-         position == -1 and high >= sl_price
-hit_tp = position == 1  and high >= tp_price or
-         position == -1 and low  <= tp_price
+hit_sl = (position == 1  and low  <= sl_price) or (position == -1 and high >= sl_price)
+hit_tp = (position == 1  and high >= tp_price) or (position == -1 and low  <= tp_price)
 
 close_signal = position != 0 and (hit_sl or hit_tp or eod_time)
 
@@ -113,26 +151,36 @@ if close_signal
 // ═══════════════════════════════════════════════════════════════
 // PLOTS
 // ═══════════════════════════════════════════════════════════════
-plot(ema_fast,  title="EMA 9",   color=color.blue,   linewidth=1)
-plot(ema_slow,  title="EMA 21",  color=color.orange, linewidth=2)
-plot(ema_200,   title="EMA 200", color=color.gray,   linewidth=1)
-plot(vwap_val,  title="VWAP",    color=color.purple, linewidth=2)
-plot(bb_upper,  title="BB Upper",color=color.new(color.gray, 70), linewidth=1)
-plot(bb_lower,  title="BB Lower",color=color.new(color.gray, 70), linewidth=1)
-plot(sl_price,  title="SL",      color=color.red,    linewidth=1, style=plot.style_linebr)
-plot(tp_price,  title="TP",      color=color.green,  linewidth=1, style=plot.style_linebr)
+plot(ema_fast, title="EMA 9",   color=color.blue,   linewidth=1)
+plot(ema_slow, title="EMA 21",  color=color.orange, linewidth=2)
+plot(ema_200,  title="EMA 200", color=color.gray,   linewidth=1)
+plot(vwap_val, title="VWAP",    color=color.purple, linewidth=2)
 
-plotshape(buy_signal,   title="BUY",   style=shape.labelup,   location=location.belowbar, color=color.green, text="BUY",   textcolor=color.white, size=size.normal)
-plotshape(sell_signal,  title="SELL",  style=shape.labeldown, location=location.abovebar, color=color.red,   text="SELL",  textcolor=color.white, size=size.normal)
-plotshape(close_signal, title="CLOSE", style=shape.xcross,    location=location.abovebar, color=color.white, text="EXIT",  textcolor=color.white, size=size.small)
+// FVG zones
+var line bull_fvg_line = na
+var line bear_fvg_line = na
+plot(bull_fvg_bottom, title="Bull FVG Bottom", color=color.new(color.green, 70), linewidth=1, style=plot.style_linebr)
+plot(bull_fvg_top,    title="Bull FVG Top",    color=color.new(color.green, 70), linewidth=1, style=plot.style_linebr)
+plot(bear_fvg_bottom, title="Bear FVG Bottom", color=color.new(color.red, 70),   linewidth=1, style=plot.style_linebr)
+plot(bear_fvg_top,    title="Bear FVG Top",    color=color.new(color.red, 70),   linewidth=1, style=plot.style_linebr)
 
-bgcolor(bull_trend ? color.new(color.green, 95) : na, title="Bull Trend")
-bgcolor(bear_trend ? color.new(color.red,   95) : na, title="Bear Trend")
-bgcolor(is_ranging ? color.new(color.yellow,97) : na, title="Ranging")
+plot(sl_price, title="SL", color=color.red,   linewidth=1, style=plot.style_linebr)
+plot(tp_price, title="TP", color=color.green, linewidth=1, style=plot.style_linebr)
+
+plotshape(buy_signal,   style=shape.labelup,   location=location.belowbar, color=color.green, text="BUY",  textcolor=color.white, size=size.normal)
+plotshape(sell_signal,  style=shape.labeldown, location=location.abovebar, color=color.red,   text="SELL", textcolor=color.white, size=size.normal)
+plotshape(close_signal, style=shape.xcross,    location=location.abovebar, color=color.white, text="EXIT", textcolor=color.white, size=size.small)
+
+// Sweep markers
+plotshape(bull_sweep, title="Bull Sweep", style=shape.triangleup,   location=location.belowbar, color=color.new(color.aqua, 30),   size=size.small, text="SWEEP↑")
+plotshape(bear_sweep, title="Bear Sweep", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 30), size=size.small, text="SWEEP↓")
+
+bgcolor(bull_trend ? color.new(color.green, 95) : na)
+bgcolor(bear_trend ? color.new(color.red,   95) : na)
 
 // ═══════════════════════════════════════════════════════════════
-// ALERTS — single alert() call per bar, script sends correct JSON
-// Create ONE TradingView alert: condition = "Any alert() function call"
+// ALERTS
+// Create ONE alert per strategy: condition = "Any alert() function call"
 // ═══════════════════════════════════════════════════════════════
 if buy_signal
     alert('{"secret":"mysecret123","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close, '#.00') + ',"timeframe":"5m","strategy":"ema_cross","signal":"buy"}',   alert.freq_once_per_bar_close)
