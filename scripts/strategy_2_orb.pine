@@ -174,8 +174,11 @@ recent_bull_s = ta.barssince(bull_sweep) <= 10
 recent_bear_s = ta.barssince(bear_sweep) <= 10
 
 // ORB-specific sweep: was the opposite side of the range swept (inducement)?
-orb_low_swept  = orb_set and not na(orb_low)  and ta.lowest(low,  20) < orb_low
-orb_high_swept = orb_set and not na(orb_high) and ta.highest(high, 20) > orb_high
+// Pre-compute unconditionally so historical functions always execute every bar
+lowest_20  = ta.lowest(low,  20)
+highest_20 = ta.highest(high, 20)
+orb_low_swept  = orb_set and not na(orb_low)  and lowest_20  < orb_low
+orb_high_swept = orb_set and not na(orb_high) and highest_20 > orb_high
 
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  ENTRY SIGNALS                                               ║
@@ -184,8 +187,12 @@ orb_high_swept = orb_set and not na(orb_high) and ta.highest(high, 20) > orb_hig
 smc_bull = recent_bull_fvg or recent_bull_s or orb_low_swept
 smc_bear = recent_bear_fvg or recent_bear_s or orb_high_swept
 
-buy_signal  = in_hours and is_spy and orb_set and ta.crossover(close,  orb_high) and high_rvol and smc_bull
-sell_signal = in_hours and is_spy and orb_set and ta.crossunder(close, orb_low)  and high_rvol and smc_bear
+// Pre-compute crossover/crossunder unconditionally so they run every bar
+cross_above_orb = ta.crossover(close,  orb_high)
+cross_below_orb = ta.crossunder(close, orb_low)
+
+buy_signal  = in_hours and is_spy and orb_set and cross_above_orb and high_rvol and smc_bull
+sell_signal = in_hours and is_spy and orb_set and cross_below_orb and high_rvol and smc_bear
 
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  POSITION TRACKING & SL / TP                                 ║
