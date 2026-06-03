@@ -25,10 +25,16 @@ async def send_telegram(message: str):
     token   = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
+        print("[TELEGRAM] No token/chat_id configured — skipping notification", flush=True)
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    async with httpx.AsyncClient() as client:
-        await client.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"})
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"})
+        if not resp.json().get("ok"):
+            print(f"[TELEGRAM] API error: {resp.text}", flush=True)
+    except Exception as e:
+        print(f"[TELEGRAM] Failed to send: {e}", flush=True)
 
 
 @router.post("/test")
