@@ -89,6 +89,16 @@ async def _close_trades_for_strategy(symbol: str, price: float, strategy_id: str
     open_trades   = get_open_trades(strategy_id)
     symbol_trades = [t for t in open_trades if t["symbol"] == symbol]
 
+    if not symbol_trades:
+        S = STRATEGY_NAMES.get(strategy_id, strategy_id)
+        print(f"[SIGNAL] CLOSE received but no open trades for {symbol} / {strategy_id}", flush=True)
+        await send_telegram(
+            f"📭 <b>CLOSE signal — no open trades</b>\n"
+            f"Strategy: {S} | {symbol} @ ${price:.2f}\n"
+            f"Signal received but no position was open to close."
+        )
+        return
+
     for trade in symbol_trades:
         asset_class = trade.get("asset_class", "stock")
 
