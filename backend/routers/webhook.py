@@ -154,6 +154,56 @@ async def test_pipeline(body: dict = None):
     return {**result, "stopped_at": "none" if claude_ok else "gate4"}
 
 
+@router.post("/test/claude")
+async def test_claude(body: dict = None):
+    """
+    Test Claude (Gate 4) directly with live indicators + real options candidates.
+    Skips Gates 1-3. No Alpaca order placed. Sends Telegram with the decision.
+    """
+    if body is None:
+        body = {}
+    symbol      = body.get("symbol", "SPY").upper()
+    signal      = body.get("signal", "buy").lower()
+    strategy_id = body.get("strategy", "ema_pullback")
+
+    print(f"[TEST] direct Claude test: {strategy_id} {signal.upper()} {symbol}", flush=True)
+
+    indicators  = await asyncio.to_thread(get_all_indicators, symbol)
+    global indicators_cache
+    indicators_cache = indicators
+    price       = indicators.get("price") or 0.0
+    regime_data = await asyncio.to_thread(detect_regime, symbol)
+    account     = get_strategy_account(strategy_id)
+    strategy    = get_active_strategy()
+    factor      = multi_factor_score(indicators, signal)
+
+    candidates  = await asyncio.to_thread(get_option_candidates, price, signal)
+    if not candidates:
+        return {"status": "error", "reason": "No option candidates — market may be closed"}
+
+    print(f"[TEST] Calling Claude with {len(candidates)} candidates...", flush=True)
+    decision = await asyncio.to_thread(
+        decide_options_trade, symbol, signal, indicators,
+        regime_data, account, strategy, candidates, factor
+    )
+    print(f"[TEST] Claude responded: action={decision['action']} confidence={decision['confidence']}", flush=True)
+
+    threshold = max(strategy.get("entry_threshold", 0.60), 0.70)
+    claude_ok  = decision["action"] == "open" and decision["confidence"] >= threshold
+    final      = "[CLAUDE TEST] WOULD OPEN" if claude_ok else f"[CLAUDE TEST] SKIP — {decision['confidence']:.0%} confidence"
+
+    await send_telegram(_gate_report(symbol, signal, price, strategy_id,
+                                     regime_data, factor, candidates, decision,
+                                     final_status=final))
+    return {
+        "status":     "ok",
+        "symbol":     symbol, "signal": signal, "price": price,
+        "candidates": len(candidates),
+        "decision":   decision,
+        "would_open": claude_ok,
+    }
+
+
 @router.post("/test/reject")
 async def test_reject(body: dict = None):
     """Force a Gate 2 rejection notification to verify Telegram is working."""
