@@ -13,10 +13,10 @@ ema21_len = input.int(21, "EMA 21 Length", group=G1)
 ema50_len = input.int(50, "EMA 50 Length", group=G1)
 
 var string G2 = "Filters"
-rvol_min  = input.float(1.5, "Min RVOL",       group=G2)
+rvol_min  = input.float(1.0, "Min RVOL",       group=G2)
 swing_len = input.int(5,     "Sweep Lookback", group=G2)
 rsi_min   = input.int(40,    "RSI Min (long)",  group=G2)
-rsi_max   = input.int(65,    "RSI Max (long)",  group=G2)
+rsi_max   = input.int(70,    "RSI Max (long)",  group=G2)
 
 var string G3 = "Visuals"
 show_fvg  = input.bool(true, "Show FVG Zones",   group=G3)
