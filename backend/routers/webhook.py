@@ -74,6 +74,110 @@ async def test_trade(body: dict = None):
     }
 
 
+@router.post("/test/pipeline")
+async def test_pipeline(body: dict = None):
+    """
+    Dry-run end-to-end test: runs all 4 gates including Claude, sends Telegram,
+    but does NOT submit any Alpaca order or write a trade to the DB.
+    """
+    if body is None:
+        body = {}
+    symbol      = body.get("symbol", "SPY").upper()
+    signal      = body.get("signal", "buy").lower()
+    strategy_id = body.get("strategy", "ema_pullback")
+
+    print(f"[TEST] dry-run pipeline: {strategy_id} {signal.upper()} {symbol}", flush=True)
+
+    indicators  = await asyncio.to_thread(get_all_indicators, symbol)
+    global indicators_cache
+    indicators_cache = indicators
+    price       = indicators.get("price") or body.get("price", 0.0)
+    regime_data = await asyncio.to_thread(detect_regime, symbol)
+    account     = get_strategy_account(strategy_id)
+    strategy    = get_active_strategy()
+    factor      = multi_factor_score(indicators, signal)
+    candidates: list = []
+
+    result = {
+        "mode": "dry_run",
+        "symbol": symbol, "signal": signal, "price": price,
+        "strategy": strategy_id,
+        "regime": regime_data,
+        "factor_score": factor,
+        "gates": {}
+    }
+
+    # Gate 1
+    vix = regime_data.get("vix") or 0
+    result["gates"]["gate1_vix"] = {"pass": vix <= 30, "vix": vix}
+    if vix > 30:
+        await send_telegram(_gate_report(symbol, signal, price, strategy_id,
+                                         regime_data, factor, candidates,
+                                         final_status="[DRY RUN] REJECTED — VIX panic regime"))
+        return {**result, "stopped_at": "gate1"}
+
+    # Gate 2
+    result["gates"]["gate2_factor"] = {"pass": factor["score"] >= 3, "score": factor["score"], "factors": factor["factors"]}
+    if factor["score"] < 3:
+        await send_telegram(_gate_report(symbol, signal, price, strategy_id,
+                                         regime_data, factor, candidates,
+                                         final_status=f"[DRY RUN] REJECTED — {factor['score']}/5 factors"))
+        return {**result, "stopped_at": "gate2"}
+
+    # Gate 3
+    candidates = await asyncio.to_thread(get_option_candidates, price, signal)
+    result["gates"]["gate3_options"] = {"pass": bool(candidates), "count": len(candidates)}
+    if not candidates:
+        await send_telegram(_gate_report(symbol, signal, price, strategy_id,
+                                         regime_data, factor, candidates,
+                                         final_status="[DRY RUN] REJECTED — no liquid options"))
+        return {**result, "stopped_at": "gate3"}
+
+    # Gate 4 — Claude (real call, no order placed)
+    decision = await asyncio.to_thread(
+        decide_options_trade, symbol, signal, indicators,
+        regime_data, account, strategy, candidates, factor
+    )
+    threshold = max(strategy.get("entry_threshold", 0.60), 0.70)
+    claude_ok = decision["action"] == "open" and decision["confidence"] >= threshold
+    result["gates"]["gate4_claude"] = {
+        "pass": claude_ok, "action": decision["action"],
+        "confidence": decision["confidence"], "rr_ratio": decision.get("rr_ratio"),
+        "reasoning": decision.get("reasoning")
+    }
+    result["decision"] = decision
+
+    final = "[DRY RUN] WOULD OPEN — no order placed" if claude_ok else f"[DRY RUN] REJECTED — Claude {decision['confidence']:.0%}"
+    await send_telegram(_gate_report(symbol, signal, price, strategy_id,
+                                     regime_data, factor, candidates, decision,
+                                     final_status=final))
+    return {**result, "stopped_at": "none" if claude_ok else "gate4"}
+
+
+@router.post("/test/reject")
+async def test_reject(body: dict = None):
+    """Force a Gate 2 rejection notification to verify Telegram is working."""
+    if body is None:
+        body = {}
+    symbol      = body.get("symbol", "SPY").upper()
+    signal      = body.get("signal", "buy").lower()
+    strategy_id = body.get("strategy", "ema_pullback")
+    price       = body.get("price", 0.01)
+
+    fake_regime = {"regime": "ranging", "trend": "sideways", "vix": 16.0,
+                   "adx": 15.0, "atr_pct": 0.20, "volatility": "low", "volume": "below_avg"}
+    fake_factor = {"score": 1, "factors": {"momentum": False, "trend": False,
+                                            "vwap": False, "adx_trending": False,
+                                            "fvg_or_sweep": True}}
+    global indicators_cache
+    indicators_cache = {"rsi": 45, "adx": 15, "macd": {"histogram": -0.1}}
+
+    await send_telegram(_gate_report(symbol, signal, price, strategy_id,
+                                     fake_regime, fake_factor, [],
+                                     final_status="[TEST] REJECTED — Gate 2 forced failure"))
+    return {"status": "test_reject_sent", "symbol": symbol, "signal": signal}
+
+
 async def _process_signal(symbol: str, signal: str, price: float, strategy_id: str):
     """Process trade logic in the background so TradingView gets an immediate 200."""
     print(f"[SIGNAL] {strategy_id} {signal.upper()} {symbol} @ {price:.2f}", flush=True)
