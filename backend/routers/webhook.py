@@ -320,10 +320,10 @@ def _gate_report(symbol: str, signal: str, price: float, strategy_id: str,
         "<b>Gate Results:</b>",
         f"  {T(vix_ok)} Gate 1 — VIX ≤ 30  (current: {vix})",
         f"  {T(factor_ok)} Gate 2 — Score {sc}/5  (need ≥3)",
-        f"    {T(f.get('momentum'))}  Momentum  (RSI={indicators_cache.get('rsi','?')}  MACD hist={'+ ' if (indicators_cache.get('macd') or {}).get('histogram',0) > 0 else '−'})",
-        f"    {T(f.get('trend'))}  Trend  (EMA fast {'>' if f.get('trend') else '<'} slow)",
+        f"    {T(f.get('momentum'))}  Momentum  (RSI={indicators_cache.get('rsi','?')}  MACD hist={'+ ' if (indicators_cache.get('macd') or {}).get('histogram',0) > 0 else '-'})",
+        f"    {T(f.get('trend'))}  Trend  (EMA fast {'&gt;' if f.get('trend') else '&lt;'} slow)",
         f"    {T(f.get('vwap'))}  VWAP  (price {'above' if f.get('vwap') else 'below'})",
-        f"    {T(f.get('adx_trending'))}  ADX  (={indicators_cache.get('adx','?')}  need >20)",
+        f"    {T(f.get('adx_trending'))}  ADX  (={indicators_cache.get('adx','?')}  need &gt;20)",
         f"    {T(f.get('fvg_or_sweep'))}  FVG / Sweep  ({'active' if f.get('fvg_or_sweep') else 'none'})",
     ]
 
@@ -337,7 +337,7 @@ def _gate_report(symbol: str, signal: str, price: float, strategy_id: str,
         lines += [
             f"  {T(claude_ok)} Gate 4 — Claude  (confidence {conf:.0%}  need ≥70%)",
             f"            R:R = {decision.get('rr_ratio','?')}:1",
-            f"            \"{decision.get('reasoning','')[:120]}\"",
+            f"            \"{decision.get('reasoning','')[:120].replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')}\"",
         ]
 
     lines += ["", f"{'🟢' if final_status == 'OPENED' else '🔴'} <b>{final_status}</b>"]
