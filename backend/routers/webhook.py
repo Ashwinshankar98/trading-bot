@@ -337,7 +337,7 @@ def _gate_report(symbol: str, signal: str, price: float, strategy_id: str,
         lines += [
             f"  {T(claude_ok)} Gate 4 — Claude  (confidence {conf:.0%}  need ≥70%)",
             f"            R:R = {decision.get('rr_ratio','?')}:1",
-            f"            \"{decision.get('reasoning','')[:120].replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')}\"",
+            f"            \"{decision.get('reasoning','')[:1000].replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')}\"",
         ]
 
     lines += ["", f"{'🟢' if final_status == 'OPENED' else '🔴'} <b>{final_status}</b>"]
