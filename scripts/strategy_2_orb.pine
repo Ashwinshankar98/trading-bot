@@ -12,8 +12,9 @@ var string G1 = "ORB Settings"
 orb_minutes = input.int(15, "Opening Range (minutes)", group=G1, minval=5, maxval=30)
 
 var string G2 = "Filters"
-rvol_min  = input.float(1.5, "Min RVOL",       group=G2)
-swing_len = input.int(5,     "Sweep Lookback", group=G2)
+rvol_min      = input.float(1.5, "Min RVOL (buy)",  group=G2)
+rvol_min_sell = input.float(0.8, "Min RVOL (sell)", group=G2)
+swing_len     = input.int(5,     "Sweep Lookback",  group=G2)
 
 var string G3 = "Visuals"
 show_fvg  = input.bool(true, "Show FVG Zones",   group=G3)
@@ -91,7 +92,8 @@ rsi_val  = ta.rsi(close, 14)
 // ╚══════════════════════════════════════════════════════════════╝
 vol_avg   = ta.sma(volume, 20)
 rvol      = volume / vol_avg
-high_rvol = rvol >= rvol_min
+high_rvol      = rvol >= rvol_min
+high_rvol_sell = rvol >= rvol_min_sell
 
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  FAIR VALUE GAPS (FVG)                                       ║
@@ -191,8 +193,8 @@ smc_bear = recent_bear_fvg or recent_bear_s or orb_high_swept
 cross_above_orb = ta.crossover(close,  orb_high)
 cross_below_orb = ta.crossunder(close, orb_low)
 
-buy_signal  = in_hours and is_spy and orb_set and cross_above_orb and high_rvol and smc_bull
-sell_signal = in_hours and is_spy and orb_set and cross_below_orb and high_rvol and smc_bear
+buy_signal  = in_hours and is_spy and orb_set and cross_above_orb and high_rvol      and smc_bull
+sell_signal = in_hours and is_spy and orb_set and cross_below_orb and high_rvol_sell and smc_bear
 
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  POSITION TRACKING & SL / TP                                 ║
