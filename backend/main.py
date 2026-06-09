@@ -10,6 +10,7 @@ load_dotenv()
 
 from database import init_db, get_connection
 from routers import webhook, trades, strategy, improve
+from routers.improve import run_weekly_review
 from core.improver import run_improvement_cycle
 from core.paper_trader import close_option_trade
 
@@ -104,9 +105,17 @@ async def startup():
         replace_existing=True,
     )
 
+    # Weekly trade review: every Friday at 4:30 PM ET — diagnose the week, no auto-changes
+    scheduler.add_job(
+        run_weekly_review,
+        CronTrigger(day_of_week="fri", hour=16, minute=30, timezone="America/New_York"),
+        id="weekly_review",
+        replace_existing=True,
+    )
+
     scheduler.start()
     print("[App] Trading bot started")
-    print("[App] Schedulers: weekly improvement (Mon 9 AM ET), EOD force-close (3:50 PM ET)")
+    print("[App] Schedulers: weekly improvement (Mon 9 AM ET), EOD force-close (3:50 PM ET), weekly review (Fri 4:30 PM ET)")
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
