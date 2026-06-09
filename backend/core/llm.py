@@ -32,7 +32,9 @@ SKIP IMMEDIATELY IF:
 - VIX > 30 (panic regime, options pricing is unreliable).
 - Signal direction contradicts the macro trend.
 - Fewer than 2 factors are aligned.
-- Only 0DTE available and confidence < 0.80 (theta kills marginal plays).\
+- Only 0DTE available and confidence < 0.80 (theta kills marginal plays).
+- RSI < 25 on a SELL/put signal — extreme oversold is a mean-reversion warning, not a continuation signal. A bounce is more likely than a continuation at this level; the risk/reward flips against the trade.
+- RSI > 75 on a BUY/call signal — extreme overbought carries the same mean-reversion risk to the downside.\
 """
 
 
