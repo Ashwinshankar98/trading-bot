@@ -772,6 +772,38 @@ Every Monday at 9 AM ET, Claude reviews the past week's performance across all 3
 | `POST /strategy/monte-carlo` | 1000-path Monte Carlo simulation |
 | `GET /strategy/monte-carlo/from-history` | Monte Carlo using actual closed trade stats |
 
+### Self-Improvement & Review
+| Endpoint | Description |
+|----------|-------------|
+| `POST /improve/run` | Run the automated self-improvement cycle (updates strategy parameters) |
+| `POST /improve/review` | Weekly trade review — Claude diagnoses patterns, sends Telegram report, **no auto-changes** |
+| `GET /improve/history` | All strategy versions with rationale |
+| `GET /improve/current` | Currently active strategy rules |
+
+#### Testing Endpoints
+| Endpoint | Description |
+|----------|-------------|
+| `POST /webhook/test/reject` | Force a Gate 2 rejection — verifies Telegram is working |
+| `POST /webhook/test/pipeline` | Dry-run all 4 gates with live data, no order placed |
+| `POST /webhook/test/claude` | Test Gate 4 (Claude) directly, bypassing Gates 1–3 |
+
+#### Manual Weekly Review Command
+
+Trigger the review at any time (results arrive on Telegram within ~30 seconds):
+
+```bash
+curl -s -X POST "https://trading-bot-production-8037.up.railway.app/improve/review?lookback_days=7" \
+  | python3 -m json.tool
+```
+
+Change `lookback_days` to review a longer window (e.g. `14` for two weeks). The Telegram message will include:
+- Win rate, P&L, and max losing streak for the period
+- What the losing trades had in common (RSI level, RVOL, timing)
+- Whether losses were caused by a market reversal or a repeatable system flaw
+- 2–3 specific, measurable suggestions — with **nothing changed automatically**
+
+You decide which suggestions to act on.
+
 ---
 
 ## Project Structure
